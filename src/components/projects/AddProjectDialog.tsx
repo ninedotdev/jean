@@ -1,0 +1,157 @@
+import { useCallback } from 'react'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
+import { FolderOpen, FolderPlus } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useProjectsStore } from '@/store/projects-store'
+import { useAddProject, useInitProject, isTauri } from '@/services/projects'
+
+export function AddProjectDialog() {
+  const { addProjectDialogOpen, addProjectParentFolderId, setAddProjectDialogOpen } = useProjectsStore()
+  const addProject = useAddProject()
+  const initProject = useInitProject()
+
+  const isPending = addProject.isPending || initProject.isPending
+
+  const handleAddExisting = useCallback(async () => {
+    if (!isTauri()) {
+      toast.error('Not running in Tauri', {
+        description:
+          'Run the app with "npm run tauri:dev" to use native features.',
+      })
+      return
+    }
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select a git repository',
+      })
+
+      if (selected && typeof selected === 'string') {
+        try {
+          await addProject.mutateAsync({
+            path: selected,
+            parentId: addProjectParentFolderId ?? undefined,
+          })
+          setAddProjectDialogOpen(false)
+        } catch (error) {
+          // Check if error is "not a git repository"
+          const errorMessage =
+            typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : ''
+
+          if (
+            errorMessage.includes('not a git repository') ||
+            errorMessage.includes("ambiguous argument 'HEAD'")
+          ) {
+            // Open the git init modal instead of showing toast
+            // This handles both: folder without git, and git repo without commits
+            const { openGitInitModal } = useProjectsStore.getState()
+            openGitInitModal(selected)
+          }
+          // Other errors are handled by mutation's onError (shows toast)
+        }
+      }
+    } catch (error) {
+      // User cancelled - don't show error
+      if (error instanceof Error && error.message.includes('cancel')) {
+        return
+      }
+      // Other errors handled by mutation
+    }
+  }, [addProject, addProjectParentFolderId, setAddProjectDialogOpen])
+
+  const handleInitNew = useCallback(async () => {
+    if (!isTauri()) {
+      toast.error('Not running in Tauri', {
+        description:
+          'Run the app with "npm run tauri:dev" to use native features.',
+      })
+      return
+    }
+
+    try {
+      // Use save dialog to let user pick location and name for new project
+      const selected = await save({
+        title: 'Create new project',
+        defaultPath: 'my-project',
+      })
+
+      if (selected && typeof selected === 'string') {
+        await initProject.mutateAsync({
+          path: selected,
+          parentId: addProjectParentFolderId ?? undefined,
+        })
+        setAddProjectDialogOpen(false)
+      }
+    } catch (error) {
+      // User cancelled - don't show error
+      if (error instanceof Error && error.message.includes('cancel')) {
+        return
+      }
+      // Other errors handled by mutation
+    }
+  }, [initProject, addProjectParentFolderId, setAddProjectDialogOpen])
+
+  return (
+    <Dialog open={addProjectDialogOpen} onOpenChange={setAddProjectDialogOpen}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New Project</DialogTitle>
+          <DialogDescription>
+            Add an existing git repository or create a new one.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-3 py-4">
+          <button
+            onClick={handleAddExisting}
+            disabled={isPending}
+            className="flex items-start gap-4 rounded-lg border border-border p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <FolderOpen className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-medium leading-none">
+                Add Existing Project
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Select a git repository from your computer
+              </p>
+            </div>
+          </button>
+
+          <button
+            onClick={handleInitNew}
+            disabled={isPending}
+            className="flex items-start gap-4 rounded-lg border border-border p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <FolderPlus className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-medium leading-none">
+                Initialize New Project
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Create a new directory with git initialized
+              </p>
+            </div>
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

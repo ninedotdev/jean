@@ -1,0 +1,223 @@
+import { useCallback, useState, useRef, useEffect } from 'react'
+import { Code, Terminal, Folder, Settings } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useUIStore } from '@/store/ui-store'
+import { useProjectsStore } from '@/store/projects-store'
+import { useChatStore } from '@/store/chat-store'
+import {
+  useOpenWorktreeInFinder,
+  useOpenWorktreeInTerminal,
+  useOpenWorktreeInEditor,
+  useProjects,
+} from '@/services/projects'
+import { usePreferences } from '@/services/preferences'
+import { getEditorLabel, getTerminalLabel } from '@/types/preferences'
+import { notify } from '@/lib/notifications'
+import { cn } from '@/lib/utils'
+
+type OpenOption = 'editor' | 'terminal' | 'finder'
+
+export function OpenInModal() {
+  const { openInModalOpen, setOpenInModalOpen, openPreferencesPane } =
+    useUIStore()
+  const selectedWorktreeId = useProjectsStore(state => state.selectedWorktreeId)
+  const selectedProjectId = useProjectsStore(state => state.selectedProjectId)
+  const { data: projects } = useProjects()
+  // Track whether we've initialized the selection for this open
+  const hasInitializedRef = useRef(false)
+  const [selectedOption, setSelectedOption] = useState<OpenOption>('editor')
+
+  const openInFinder = useOpenWorktreeInFinder()
+  const openInTerminal = useOpenWorktreeInTerminal()
+  const openInEditor = useOpenWorktreeInEditor()
+  const { data: preferences } = usePreferences()
+
+  // Build options with dynamic labels based on preferences
+  const options: {
+    id: OpenOption
+    label: string
+    icon: typeof Code
+    key: string
+  }[] = [
+    {
+      id: 'editor',
+      label: getEditorLabel(preferences?.editor),
+      icon: Code,
+      key: 'E',
+    },
+    {
+      id: 'terminal',
+      label: getTerminalLabel(preferences?.terminal),
+      icon: Terminal,
+      key: 'T',
+    },
+    { id: 'finder', label: 'Finder', icon: Folder, key: 'F' },
+  ]
+
+  // Reset selection tracking when modal closes
+  useEffect(() => {
+    if (!openInModalOpen) {
+      hasInitializedRef.current = false
+    }
+  }, [openInModalOpen])
+
+  // Initialize selection when modal opens (via onOpenChange callback pattern)
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && !hasInitializedRef.current) {
+        setSelectedOption('editor')
+        hasInitializedRef.current = true
+      }
+      setOpenInModalOpen(open)
+    },
+    [setOpenInModalOpen]
+  )
+
+  const getTargetPath = useCallback(() => {
+    // Try worktree path first
+    if (selectedWorktreeId) {
+      const path = useChatStore.getState().getWorktreePath(selectedWorktreeId)
+      if (path) return path
+    }
+    // Fall back to project path
+    if (selectedProjectId && projects) {
+      const project = projects.find(p => p.id === selectedProjectId)
+      if (project) return project.path
+    }
+    return null
+  }, [selectedWorktreeId, selectedProjectId, projects])
+
+  const executeAction = useCallback(
+    (option: OpenOption) => {
+      const targetPath = getTargetPath()
+      if (!targetPath) {
+        notify('No project or worktree selected', undefined, { type: 'error' })
+        setOpenInModalOpen(false)
+        return
+      }
+
+      switch (option) {
+        case 'editor':
+          openInEditor.mutate({
+            worktreePath: targetPath,
+            editor: preferences?.editor,
+          })
+          break
+        case 'terminal':
+          openInTerminal.mutate({
+            worktreePath: targetPath,
+            terminal: preferences?.terminal,
+          })
+          break
+        case 'finder':
+          openInFinder.mutate(targetPath)
+          break
+      }
+
+      setOpenInModalOpen(false)
+    },
+    [
+      getTargetPath,
+      openInEditor,
+      openInTerminal,
+      openInFinder,
+      preferences,
+      setOpenInModalOpen,
+    ]
+  )
+
+  // Handle keyboard navigation
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+      const optionIds: OpenOption[] = ['editor', 'terminal', 'finder']
+
+      // Quick select with e/t/f
+      if (key === 'e') {
+        e.preventDefault()
+        executeAction('editor')
+      } else if (key === 't') {
+        e.preventDefault()
+        executeAction('terminal')
+      } else if (key === 'f') {
+        e.preventDefault()
+        executeAction('finder')
+      } else if (key === 'enter') {
+        e.preventDefault()
+        executeAction(selectedOption)
+      } else if (key === 'arrowdown' || key === 'arrowup') {
+        e.preventDefault()
+        const currentIndex = optionIds.indexOf(selectedOption)
+        const newIndex =
+          key === 'arrowdown'
+            ? (currentIndex + 1) % optionIds.length
+            : (currentIndex - 1 + optionIds.length) % optionIds.length
+        const newOptionId = optionIds[newIndex]
+        if (newOptionId) {
+          setSelectedOption(newOptionId)
+        }
+      }
+    },
+    [executeAction, selectedOption]
+  )
+
+  const handleOpenSettings = useCallback(() => {
+    setOpenInModalOpen(false)
+    openPreferencesPane('general')
+  }, [setOpenInModalOpen, openPreferencesPane])
+
+  return (
+    <Dialog open={openInModalOpen} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-[280px] p-0" onKeyDown={handleKeyDown}>
+        <DialogHeader className="px-4 pt-4 pb-2">
+          <DialogTitle className="text-sm font-medium">Open in...</DialogTitle>
+        </DialogHeader>
+
+        <div className="pb-2">
+          {options.map(option => {
+            const Icon = option.icon
+            const isSelected = selectedOption === option.id
+
+            return (
+              <button
+                key={option.id}
+                onClick={() => executeAction(option.id)}
+                onMouseEnter={() => setSelectedOption(option.id)}
+                className={cn(
+                  'w-full flex items-center justify-between px-4 py-2 text-sm transition-colors',
+                  'hover:bg-accent focus:outline-none',
+                  isSelected && 'bg-accent'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <Icon className="h-4 w-4 text-muted-foreground" />
+                  <span>{option.label}</span>
+                </div>
+                <kbd className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                  {option.key}
+                </kbd>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="border-t px-4 py-2">
+          <button
+            onClick={handleOpenSettings}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Settings className="h-3 w-3" />
+            <span>Change defaults in Settings</span>
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export default OpenInModal

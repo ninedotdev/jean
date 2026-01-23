@@ -1,0 +1,291 @@
+import { useEffect, useRef, useCallback, memo } from 'react'
+import { Plus, X, Minus, Terminal, ChevronUp } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
+import { useTerminal } from '@/hooks/useTerminal'
+import { useTerminalStore, type TerminalInstance } from '@/store/terminal-store'
+import { cn } from '@/lib/utils'
+import '@xterm/xterm/css/xterm.css'
+
+interface TerminalViewProps {
+  worktreeId: string
+  worktreePath: string
+  isCollapsed?: boolean
+  onExpand?: () => void
+}
+
+/** Individual terminal tab content */
+const TerminalTabContent = memo(function TerminalTabContent({
+  terminal,
+  worktreePath,
+  isActive,
+  isCollapsed = false,
+}: {
+  terminal: TerminalInstance
+  worktreePath: string
+  isActive: boolean
+  isCollapsed?: boolean
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const { initTerminal, fit, focus } = useTerminal({
+    terminalId: terminal.id,
+    worktreePath,
+    command: terminal.command,
+  })
+  const initialized = useRef(false)
+
+  useEffect(() => {
+    if (containerRef.current && !initialized.current && isActive) {
+      initialized.current = true
+      initTerminal(containerRef.current)
+    }
+  }, [initTerminal, isActive])
+
+  // Handle resize with debouncing
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    const observer = new ResizeObserver(() => {
+      // Debounce fit calls to ensure container has settled
+      if (timeoutId) clearTimeout(timeoutId)
+      timeoutId = setTimeout(() => {
+        if (isActive) fit()
+      }, 50)
+    })
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current)
+    }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId)
+      observer.disconnect()
+    }
+  }, [fit, isActive])
+
+  // Fit and focus when becoming active or when expanding from collapsed
+  useEffect(() => {
+    if (isActive && initialized.current && !isCollapsed) {
+      // Use requestAnimationFrame to ensure container has proper dimensions after expanding
+      requestAnimationFrame(() => {
+        fit()
+        focus()
+      })
+    }
+  }, [isActive, isCollapsed, fit, focus])
+
+  return (
+    <div className={cn('h-full w-full p-2', !isActive && 'hidden')}>
+      <div ref={containerRef} className="h-full w-full overflow-hidden" />
+    </div>
+  )
+})
+
+export function TerminalView({
+  worktreeId,
+  worktreePath,
+  isCollapsed = false,
+  onExpand,
+}: TerminalViewProps) {
+  const terminals = useTerminalStore(state => state.terminals[worktreeId] ?? [])
+  const activeTerminalId = useTerminalStore(
+    state => state.activeTerminalIds[worktreeId]
+  )
+  const runningTerminals = useTerminalStore(state => state.runningTerminals)
+
+  const {
+    addTerminal,
+    removeTerminal,
+    setActiveTerminal,
+    setTerminalVisible,
+    setTerminalPanelOpen,
+    closeAllTerminals,
+  } = useTerminalStore.getState()
+
+  // Auto-create first terminal if none exists
+  useEffect(() => {
+    if (terminals.length === 0) {
+      addTerminal(worktreeId)
+    }
+  }, [terminals.length, worktreeId, addTerminal])
+
+  const handleAddTerminal = useCallback(() => {
+    addTerminal(worktreeId)
+  }, [worktreeId, addTerminal])
+
+  const handleCloseTerminal = useCallback(
+    async (e: React.MouseEvent, terminalId: string) => {
+      e.stopPropagation()
+      // Stop the PTY process
+      try {
+        await invoke('stop_terminal', { terminalId })
+      } catch {
+        // Terminal may already be stopped
+      }
+      // Remove from store
+      removeTerminal(worktreeId, terminalId)
+      // If this was the last terminal, close the panel
+      const remaining = useTerminalStore.getState().terminals[worktreeId] ?? []
+      if (remaining.length === 0) {
+        setTerminalPanelOpen(false)
+        setTerminalVisible(false)
+      }
+    },
+    [worktreeId, removeTerminal, setTerminalPanelOpen, setTerminalVisible]
+  )
+
+  const handleSelectTerminal = useCallback(
+    (terminalId: string) => {
+      setActiveTerminal(worktreeId, terminalId)
+    },
+    [worktreeId, setActiveTerminal]
+  )
+
+  const handleMinimize = useCallback(() => {
+    setTerminalVisible(false)
+  }, [setTerminalVisible])
+
+  const handleCloseAll = useCallback(async () => {
+    const terminalIds = closeAllTerminals(worktreeId)
+    // Stop all PTY processes
+    for (const terminalId of terminalIds) {
+      try {
+        await invoke('stop_terminal', { terminalId })
+      } catch {
+        // Terminal may already be stopped
+      }
+    }
+  }, [worktreeId, closeAllTerminals])
+
+  // When collapsed, show collapsed bar but keep terminals mounted (hidden) to preserve state
+  if (isCollapsed) {
+    return (
+      <div className="flex h-full flex-col bg-[#1a1a1a]">
+        {/* Collapsed bar */}
+        <button
+          type="button"
+          onClick={onExpand}
+          className="flex h-full w-full items-center gap-2 px-3 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-300"
+        >
+          <Terminal className="h-3.5 w-3.5" />
+          <span>Terminal</span>
+          {runningTerminals.size > 0 && (
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+          )}
+          <div className="flex-1" />
+          <ChevronUp className="h-3.5 w-3.5" />
+        </button>
+        {/* Keep terminals mounted but hidden to preserve state */}
+        <div className="hidden">
+          {terminals.map(terminal => (
+            <TerminalTabContent
+              key={terminal.id}
+              terminal={terminal}
+              worktreePath={worktreePath}
+              isActive={terminal.id === activeTerminalId}
+              isCollapsed
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full flex-col bg-[#1a1a1a]">
+      {/* Tab bar */}
+      <div className="flex items-center border-b border-neutral-700">
+        <div className="flex min-w-0 items-center overflow-x-auto">
+          {terminals.map(terminal => {
+            const isActive = terminal.id === activeTerminalId
+            const isRunning = runningTerminals.has(terminal.id)
+
+            return (
+              <button
+                key={terminal.id}
+                type="button"
+                onClick={() => handleSelectTerminal(terminal.id)}
+                className={cn(
+                  'group flex shrink-0 items-center gap-1.5 border-r border-neutral-700 px-3 py-1.5 text-xs transition-colors',
+                  isActive
+                    ? 'bg-neutral-800 text-neutral-200'
+                    : 'text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-300'
+                )}
+              >
+                {/* Running indicator */}
+                {isRunning && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                )}
+                <span className="max-w-[100px] truncate">{terminal.label}</span>
+                {/* Close button - always visible */}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={e => handleCloseTerminal(e, terminal.id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      handleCloseTerminal(
+                        e as unknown as React.MouseEvent,
+                        terminal.id
+                      )
+                    }
+                  }}
+                  className={cn(
+                    'rounded p-0.5 opacity-0 transition-opacity hover:bg-neutral-600 group-hover:opacity-100',
+                    isActive && 'opacity-50'
+                  )}
+                >
+                  <X className="h-3 w-3" />
+                </span>
+              </button>
+            )
+          })}
+
+          {/* Add terminal button */}
+          <button
+            type="button"
+            onClick={handleAddTerminal}
+            className="flex h-full shrink-0 items-center px-2 text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-300"
+            aria-label="New terminal"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Minimize button */}
+        <button
+          type="button"
+          onClick={handleMinimize}
+          className="flex h-full shrink-0 items-center px-2 text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-300"
+          aria-label="Minimize terminal"
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </button>
+
+        {/* Close all button */}
+        <button
+          type="button"
+          onClick={handleCloseAll}
+          className="flex h-full shrink-0 items-center px-2 text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-red-400"
+          aria-label="Close all terminals"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Terminal content area */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {terminals.map(terminal => (
+          <TerminalTabContent
+            key={terminal.id}
+            terminal={terminal}
+            worktreePath={worktreePath}
+            isActive={terminal.id === activeTerminalId}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}

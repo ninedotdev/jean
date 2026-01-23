@@ -1,0 +1,505 @@
+import { useEffect, useRef } from 'react'
+import { listen } from '@tauri-apps/api/event'
+import { getVersion } from '@tauri-apps/api/app'
+import { check } from '@tauri-apps/plugin-updater'
+import { message } from '@tauri-apps/plugin-dialog'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
+import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useUIStore } from '@/store/ui-store'
+import { useProjectsStore } from '@/store/projects-store'
+import { useChatStore } from '@/store/chat-store'
+import { projectsQueryKeys } from '@/services/projects'
+import { chatQueryKeys } from '@/services/chat'
+import { setActiveWorktreeForPolling } from '@/services/git-status'
+import { useCommandContext } from './use-command-context'
+import { usePreferences } from '@/services/preferences'
+import { logger } from '@/lib/logger'
+import {
+  eventToShortcutString,
+  DEFAULT_KEYBINDINGS,
+  type KeybindingAction,
+  type KeybindingsMap,
+} from '@/types/keybindings'
+import { isBaseSession, type Project, type Worktree } from '@/types/projects'
+
+// Throttle tracking for worktree switching
+let lastWorktreeSwitchTime = 0
+const WORKTREE_SWITCH_THROTTLE_MS = 100
+
+// Helper to switch worktrees using query cache (includes Session Board as navigation target)
+function switchWorktree(
+  direction: 'next' | 'previous',
+  queryClient: QueryClient
+) {
+  // Throttle rapid switches
+  const now = Date.now()
+  if (now - lastWorktreeSwitchTime < WORKTREE_SWITCH_THROTTLE_MS) return
+  lastWorktreeSwitchTime = now
+
+  const {
+    selectedWorktreeId,
+    selectedProjectId,
+    selectWorktree,
+    selectProject,
+  } = useProjectsStore.getState()
+  const { activeWorktreePath, clearActiveWorktree, setActiveWorktree } =
+    useChatStore.getState()
+
+  const isOnSessionBoard = !activeWorktreePath
+
+  // Determine project ID (from session board selection or current worktree)
+  let projectId: string | null = null
+  if (isOnSessionBoard) {
+    projectId = selectedProjectId
+  } else if (selectedWorktreeId) {
+    const worktreeData = queryClient.getQueryData<Worktree>([
+      ...projectsQueryKeys.all,
+      'worktree',
+      selectedWorktreeId,
+    ])
+    projectId = worktreeData?.project_id ?? null
+  }
+
+  if (!projectId) {
+    logger.debug('No project context for worktree switching')
+    return
+  }
+
+  // Get worktrees for that project from cache
+  const projectWorktrees = queryClient.getQueryData<Worktree[]>(
+    projectsQueryKeys.worktrees(projectId)
+  )
+  if (!projectWorktrees || projectWorktrees.length === 0) {
+    logger.debug('No project worktrees found in cache for switching')
+    return
+  }
+
+  // Sort worktrees same as WorktreeList: base sessions first, then by order field, then by created_at
+  const sortedWorktrees = [...projectWorktrees]
+    .filter(w => w.status !== 'pending' && w.status !== 'deleting')
+    .sort((a, b) => {
+      const aIsBase = isBaseSession(a)
+      const bIsBase = isBaseSession(b)
+      if (aIsBase && !bIsBase) return -1
+      if (!aIsBase && bIsBase) return 1
+      // Sort by order field (lower = higher in list), fall back to created_at (newest first)
+      if (a.order !== b.order) {
+        return a.order - b.order
+      }
+      return b.created_at - a.created_at
+    })
+
+  if (sortedWorktrees.length === 0) {
+    logger.debug('No valid worktrees after filtering')
+    return
+  }
+
+  // Get project for git polling context
+  const projects = queryClient.getQueryData<Project[]>(projectsQueryKeys.list())
+  const project = projects?.find(p => p.id === projectId)
+
+  // Handle navigation FROM Session Board
+  if (isOnSessionBoard) {
+    const targetIndex = direction === 'next' ? 0 : sortedWorktrees.length - 1
+    const newWorktree = sortedWorktrees[targetIndex]
+    if (!newWorktree) return
+    logger.debug('Switching from Session Board to worktree', {
+      to: newWorktree.id,
+      direction,
+    })
+    selectWorktree(newWorktree.id)
+    setActiveWorktree(newWorktree.id, newWorktree.path)
+    setActiveWorktreeForPolling({
+      worktreeId: newWorktree.id,
+      worktreePath: newWorktree.path,
+      baseBranch: project?.default_branch ?? 'main',
+      prNumber: newWorktree.pr_number,
+      prUrl: newWorktree.pr_url,
+    })
+    return
+  }
+
+  // Handle navigation between worktrees (with Session Board boundaries)
+  const currentIndex = sortedWorktrees.findIndex(
+    w => w.id === selectedWorktreeId
+  )
+  if (currentIndex === -1) return
+
+  // Check if navigating TO Session Board
+  if (direction === 'previous' && currentIndex === 0) {
+    // At first worktree, going up → switch to Session Board
+    logger.debug('Switching to Session Board view (up from first worktree)')
+    selectProject(projectId)
+    clearActiveWorktree()
+    selectWorktree(null)
+    return
+  }
+  if (direction === 'next' && currentIndex === sortedWorktrees.length - 1) {
+    // At last worktree, going down → switch to Session Board
+    logger.debug('Switching to Session Board view (down from last worktree)')
+    selectProject(projectId)
+    clearActiveWorktree()
+    selectWorktree(null)
+    return
+  }
+
+  // Normal worktree-to-worktree navigation
+  const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1
+  const newWorktree = sortedWorktrees[newIndex]
+  if (newWorktree) {
+    logger.debug('Switching worktree', {
+      from: selectedWorktreeId,
+      to: newWorktree.id,
+      direction,
+    })
+    selectWorktree(newWorktree.id)
+    setActiveWorktree(newWorktree.id, newWorktree.path)
+    setActiveWorktreeForPolling({
+      worktreeId: newWorktree.id,
+      worktreePath: newWorktree.path,
+      baseBranch: project?.default_branch ?? 'main',
+      prNumber: newWorktree.pr_number,
+      prUrl: newWorktree.pr_url,
+    })
+  }
+}
+
+/**
+ * Main window event listeners - handles global keyboard shortcuts and other app-level events
+ *
+ * This hook provides a centralized place for all global event listeners, keeping
+ * the MainWindow component clean while maintaining good separation of concerns.
+ */
+// Execute a keybinding action
+function executeKeybindingAction(
+  action: KeybindingAction,
+  commandContext: ReturnType<typeof useCommandContext>,
+  queryClient: QueryClient
+) {
+  switch (action) {
+    case 'focus_chat_input':
+      logger.debug('Keybinding: focus_chat_input')
+      window.dispatchEvent(new CustomEvent('focus-chat-input'))
+      break
+    case 'toggle_left_sidebar': {
+      logger.debug('Keybinding: toggle_left_sidebar')
+      const { leftSidebarVisible, setLeftSidebarVisible } =
+        useUIStore.getState()
+      setLeftSidebarVisible(!leftSidebarVisible)
+      break
+    }
+    case 'open_preferences':
+      logger.debug('Keybinding: open_preferences')
+      commandContext.openPreferences()
+      break
+    case 'open_commit_modal':
+      logger.debug('Keybinding: open_commit_modal')
+      commandContext.openCommitModal()
+      break
+    case 'open_pull_request':
+      logger.debug('Keybinding: open_pull_request')
+      commandContext.openPullRequest()
+      break
+    case 'open_git_diff':
+      logger.debug('Keybinding: open_git_diff')
+      window.dispatchEvent(new CustomEvent('open-git-diff'))
+      break
+    case 'execute_run':
+      logger.debug('Keybinding: execute_run')
+      window.dispatchEvent(new CustomEvent('toggle-workspace-run'))
+      break
+    case 'open_in_modal':
+      logger.debug('Keybinding: open_in_modal')
+      useUIStore.getState().setOpenInModalOpen(true)
+      break
+    case 'open_magic_modal': {
+      logger.debug('Keybinding: open_magic_modal')
+      const { activeWorktreeId, activeSessionIds, sendingSessionIds } =
+        useChatStore.getState()
+      const activeSessionId = activeWorktreeId
+        ? activeSessionIds[activeWorktreeId]
+        : null
+      const isSending = activeSessionId
+        ? (sendingSessionIds[activeSessionId] ?? false)
+        : false
+      if (!isSending) {
+        useUIStore.getState().setMagicModalOpen(true)
+      }
+      break
+    }
+    case 'new_session':
+      logger.debug('Keybinding: new_session')
+      window.dispatchEvent(new CustomEvent('create-new-session'))
+      break
+    case 'next_session':
+      logger.debug('Keybinding: next_session')
+      window.dispatchEvent(
+        new CustomEvent('switch-session', { detail: { direction: 'next' } })
+      )
+      break
+    case 'previous_session':
+      logger.debug('Keybinding: previous_session')
+      window.dispatchEvent(
+        new CustomEvent('switch-session', { detail: { direction: 'previous' } })
+      )
+      break
+    case 'close_session_or_worktree':
+      logger.debug('Keybinding: close_session_or_worktree')
+      window.dispatchEvent(new CustomEvent('close-session-or-worktree'))
+      break
+    case 'new_worktree':
+      logger.debug('Keybinding: new_worktree')
+      window.dispatchEvent(new CustomEvent('create-new-worktree'))
+      break
+    case 'next_worktree':
+      logger.debug('Keybinding: next_worktree')
+      switchWorktree('next', queryClient)
+      break
+    case 'previous_worktree':
+      logger.debug('Keybinding: previous_worktree')
+      switchWorktree('previous', queryClient)
+      break
+    case 'cycle_execution_mode': {
+      logger.debug('Keybinding: cycle_execution_mode')
+      const { activeWorktreeId, getActiveSession, cycleExecutionMode } =
+        useChatStore.getState()
+      if (activeWorktreeId) {
+        const activeSessionId = getActiveSession(activeWorktreeId)
+        if (activeSessionId) {
+          cycleExecutionMode(activeSessionId)
+        }
+      }
+      break
+    }
+    case 'approve_plan':
+      logger.debug('Keybinding: approve_plan')
+      window.dispatchEvent(new CustomEvent('approve-plan'))
+      window.dispatchEvent(new CustomEvent('answer-question'))
+      break
+    case 'restore_last_archived':
+      logger.debug('Keybinding: restore_last_archived')
+      window.dispatchEvent(new CustomEvent('restore-last-archived'))
+      break
+  }
+}
+
+export function useMainWindowEventListeners() {
+  const commandContext = useCommandContext()
+  const queryClient = useQueryClient()
+  const { data: preferences } = usePreferences()
+
+  // Keep keybindings in a ref so the event handler always has the latest
+  const keybindingsRef = useRef<KeybindingsMap>(DEFAULT_KEYBINDINGS)
+
+  // Update ref when preferences change
+  useEffect(() => {
+    keybindingsRef.current = preferences?.keybindings ?? DEFAULT_KEYBINDINGS
+  }, [preferences?.keybindings])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Convert the keyboard event to our shortcut string format
+      const shortcut = eventToShortcutString(e)
+      if (!shortcut) return
+
+      // Look up matching action in keybindings
+      const keybindings = keybindingsRef.current
+      for (const [action, binding] of Object.entries(keybindings)) {
+        if (binding === shortcut) {
+          e.preventDefault()
+          executeKeybindingAction(
+            action as KeybindingAction,
+            commandContext,
+            queryClient
+          )
+          return
+        }
+      }
+    }
+
+    // Set up native menu event listeners
+    const setupMenuListeners = async () => {
+      logger.debug('Setting up menu event listeners')
+      const unlisteners = await Promise.all([
+        listen('menu-about', async () => {
+          logger.debug('About menu event received')
+          // Show simple about dialog with dynamic version
+          const appVersion = await getVersion()
+          await message(
+            `Jean\n\nVersion: ${appVersion}\n\nBuilt with Tauri v2 + React + TypeScript`,
+            { title: 'About Jean', kind: 'info' }
+          )
+        }),
+
+        listen('menu-check-updates', async () => {
+          logger.debug('Check for updates menu event received')
+          try {
+            const update = await check()
+            if (update) {
+              commandContext.showToast(
+                `Update available: ${update.version}`,
+                'info'
+              )
+            } else {
+              commandContext.showToast(
+                'You are running the latest version',
+                'success'
+              )
+            }
+          } catch (error) {
+            logger.error('Update check failed:', { error: String(error) })
+            commandContext.showToast('Failed to check for updates', 'error')
+          }
+        }),
+
+        listen('menu-preferences', () => {
+          logger.debug('Preferences menu event received')
+          commandContext.openPreferences()
+        }),
+
+        listen('menu-toggle-left-sidebar', () => {
+          logger.debug('Toggle left sidebar menu event received')
+          const { leftSidebarVisible, setLeftSidebarVisible } =
+            useUIStore.getState()
+          setLeftSidebarVisible(!leftSidebarVisible)
+        }),
+
+        listen('menu-toggle-right-sidebar', () => {
+          logger.debug('Toggle right sidebar menu event received')
+          const { selectedWorktreeId } = useProjectsStore.getState()
+          if (selectedWorktreeId) {
+            const { rightSidebarVisible, setRightSidebarVisible } =
+              useUIStore.getState()
+            setRightSidebarVisible(!rightSidebarVisible)
+          }
+        }),
+
+        listen('menu-open-pull-request', () => {
+          logger.debug('Open pull request menu event received')
+          commandContext.openPullRequest()
+        }),
+
+        // Branch naming events (automatic branch renaming based on first message)
+        listen<{ worktree_id: string; old_branch: string; new_branch: string }>(
+          'branch-renamed',
+          event => {
+            logger.info('Branch renamed', {
+              worktreeId: event.payload.worktree_id,
+              oldBranch: event.payload.old_branch,
+              newBranch: event.payload.new_branch,
+            })
+            // Invalidate worktrees queries to refresh the worktree name in the UI
+            queryClient.invalidateQueries({
+              queryKey: projectsQueryKeys.all,
+            })
+          }
+        ),
+
+        listen<{ worktree_id: string; error: string; stage: string }>(
+          'branch-naming-failed',
+          event => {
+            logger.warn('Branch naming failed', {
+              worktreeId: event.payload.worktree_id,
+              error: event.payload.error,
+              stage: event.payload.stage,
+            })
+            // Silent failure - don't show toast to avoid interrupting workflow
+          }
+        ),
+
+        // Session naming events (automatic session renaming based on first message)
+        listen<{
+          session_id: string
+          worktree_id: string
+          old_name: string
+          new_name: string
+        }>('session-renamed', event => {
+          logger.info('Session renamed', {
+            sessionId: event.payload.session_id,
+            worktreeId: event.payload.worktree_id,
+            oldName: event.payload.old_name,
+            newName: event.payload.new_name,
+          })
+          // Invalidate sessions query to refresh the session name in the UI
+          queryClient.invalidateQueries({
+            queryKey: chatQueryKeys.sessions(event.payload.worktree_id),
+          })
+        }),
+
+        listen<{
+          session_id: string
+          worktree_id: string
+          error: string
+          stage: string
+        }>('session-naming-failed', event => {
+          logger.warn('Session naming failed', {
+            sessionId: event.payload.session_id,
+            worktreeId: event.payload.worktree_id,
+            error: event.payload.error,
+            stage: event.payload.stage,
+          })
+          // Silent failure - don't show toast to avoid interrupting workflow
+        }),
+      ])
+
+      logger.debug(
+        `Menu listeners set up successfully: ${unlisteners.length} listeners`
+      )
+      return unlisteners
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    let menuUnlisteners: (() => void)[] = []
+    setupMenuListeners()
+      .then(unlisteners => {
+        menuUnlisteners = unlisteners
+        logger.debug('Menu listeners initialized successfully')
+      })
+      .catch(error => {
+        logger.error('Failed to setup menu listeners:', error)
+      })
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      menuUnlisteners.forEach(unlisten => {
+        if (unlisten && typeof unlisten === 'function') {
+          unlisten()
+        }
+      })
+    }
+  }, [commandContext, queryClient])
+
+  // Quit confirmation for running sessions (production only)
+  useEffect(() => {
+    // Skip in development mode - only block quit in production
+    if (import.meta.env.DEV) return
+
+    let unlisten: (() => void) | null = null
+
+    getCurrentWindow()
+      .onCloseRequested(async event => {
+        try {
+          const hasRunning = await invoke<boolean>('has_running_sessions')
+          if (hasRunning) {
+            event.preventDefault()
+            window.dispatchEvent(new CustomEvent('quit-confirmation-requested'))
+          }
+        } catch (error) {
+          logger.error('Failed to check running sessions', { error })
+          // Allow quit if we can't check (fail open)
+        }
+      })
+      .then(fn => {
+        unlisten = fn
+      })
+      .catch(error => {
+        logger.error('Failed to setup close listener', { error })
+      })
+
+    return () => {
+      unlisten?.()
+    }
+  }, [])
+}

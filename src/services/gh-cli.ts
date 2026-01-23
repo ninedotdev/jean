@@ -1,0 +1,261 @@
+/**
+ * GitHub CLI management service
+ *
+ * Provides TanStack Query hooks for checking, installing, and managing
+ * the embedded GitHub CLI (gh) binary.
+ */
+
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { toast } from 'sonner'
+import { useCallback, useEffect, useState } from 'react'
+import { logger } from '@/lib/logger'
+import type {
+  GhCliStatus,
+  GhAuthStatus,
+  GhReleaseInfo,
+  GhInstallProgress,
+} from '@/types/gh-cli'
+
+// Check if running in Tauri context (vs plain browser)
+const isTauri = () =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+// Query keys for GitHub CLI
+export const ghCliQueryKeys = {
+  all: ['gh-cli'] as const,
+  status: () => [...ghCliQueryKeys.all, 'status'] as const,
+  auth: () => [...ghCliQueryKeys.all, 'auth'] as const,
+  versions: () => [...ghCliQueryKeys.all, 'versions'] as const,
+}
+
+/**
+ * Hook to check if GitHub CLI is installed and get its status
+ */
+export function useGhCliStatus() {
+  return useQuery({
+    queryKey: ghCliQueryKeys.status(),
+    queryFn: async (): Promise<GhCliStatus> => {
+      if (!isTauri()) {
+        logger.debug('Not in Tauri context, returning mock gh CLI status')
+        return { installed: false, version: null, path: null }
+      }
+
+      try {
+        logger.debug('Checking GitHub CLI installation status')
+        const status = await invoke<GhCliStatus>('check_gh_cli_installed')
+        logger.info('GitHub CLI status', { status })
+        return status
+      } catch (error) {
+        logger.error('Failed to check GitHub CLI status', { error })
+        return { installed: false, version: null, path: null }
+      }
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    gcTime: 1000 * 60 * 10, // 10 minutes
+  })
+}
+
+/**
+ * Hook to check if GitHub CLI is authenticated
+ */
+export function useGhCliAuth(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ghCliQueryKeys.auth(),
+    queryFn: async (): Promise<GhAuthStatus> => {
+      if (!isTauri()) {
+        logger.debug('Not in Tauri context, returning mock gh auth status')
+        return { authenticated: false, error: 'Not in Tauri context' }
+      }
+
+      try {
+        logger.debug('Checking GitHub CLI authentication status')
+        const status = await invoke<GhAuthStatus>('check_gh_cli_auth')
+        logger.info('GitHub CLI auth status', { status })
+        return status
+      } catch (error) {
+        logger.error('Failed to check GitHub CLI auth', { error })
+        return {
+          authenticated: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+    enabled: options?.enabled ?? true,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    gcTime: 1000 * 60 * 10, // 10 minutes
+  })
+}
+
+/**
+ * Hook to fetch available GitHub CLI versions from GitHub releases
+ */
+export function useAvailableGhVersions() {
+  return useQuery({
+    queryKey: ghCliQueryKeys.versions(),
+    queryFn: async (): Promise<GhReleaseInfo[]> => {
+      if (!isTauri()) {
+        logger.debug('Not in Tauri context, returning empty versions list')
+        return []
+      }
+
+      try {
+        logger.debug('Fetching available GitHub CLI versions')
+        // Transform snake_case from Rust to camelCase
+        const versions = await invoke<
+          {
+            version: string
+            tag_name: string
+            published_at: string
+            prerelease: boolean
+          }[]
+        >('get_available_gh_versions')
+
+        return versions.map(v => ({
+          version: v.version,
+          tagName: v.tag_name,
+          publishedAt: v.published_at,
+          prerelease: v.prerelease,
+        }))
+      } catch (error) {
+        logger.error('Failed to fetch gh CLI versions', { error })
+        throw error
+      }
+    },
+    staleTime: 1000 * 60 * 15, // 15 minutes
+    gcTime: 1000 * 60 * 30, // 30 minutes
+  })
+}
+
+/**
+ * Hook to install GitHub CLI
+ */
+export function useInstallGhCli() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (version?: string) => {
+      if (!isTauri()) {
+        throw new Error('Cannot install gh CLI outside Tauri context')
+      }
+
+      logger.info('Installing GitHub CLI', { version })
+      await invoke('install_gh_cli', { version: version ?? null })
+    },
+    // Disable retry - installation should not be retried automatically
+    retry: false,
+    onSuccess: () => {
+      // Invalidate status to refetch
+      queryClient.invalidateQueries({ queryKey: ghCliQueryKeys.status() })
+      logger.info('GitHub CLI installed successfully')
+      toast.success('GitHub CLI installed successfully')
+    },
+    onError: error => {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.error('Failed to install GitHub CLI', { error })
+      toast.error('Failed to install GitHub CLI', { description: message })
+    },
+  })
+}
+
+/**
+ * Hook to listen for installation progress events
+ * Returns [progress, resetProgress] tuple to allow resetting state before new install
+ */
+export function useGhInstallProgress(): [GhInstallProgress | null, () => void] {
+  const [progress, setProgress] = useState<GhInstallProgress | null>(null)
+
+  const resetProgress = useCallback(() => {
+    setProgress(null)
+  }, [])
+
+  useEffect(() => {
+    if (!isTauri()) return
+
+    let unlistenFn: (() => void) | null = null
+    const listenerId = Math.random().toString(36).substring(7)
+
+    const setupListener = async () => {
+      try {
+        logger.info('[useGhInstallProgress] Setting up listener', { listenerId })
+        unlistenFn = await listen<GhInstallProgress>(
+          'gh-cli:install-progress',
+          event => {
+            logger.info('[useGhInstallProgress] Received progress event', {
+              listenerId,
+              stage: event.payload.stage,
+              message: event.payload.message,
+              percent: event.payload.percent,
+            })
+            setProgress(event.payload)
+          }
+        )
+      } catch (error) {
+        logger.error('[useGhInstallProgress] Failed to setup listener', { listenerId, error })
+      }
+    }
+
+    setupListener()
+
+    return () => {
+      logger.info('[useGhInstallProgress] Cleaning up listener', { listenerId })
+      if (unlistenFn) {
+        unlistenFn()
+      }
+    }
+  }, [])
+
+  return [progress, resetProgress]
+}
+
+/**
+ * Combined hook for gh CLI setup flow
+ */
+export function useGhCliSetup() {
+  const status = useGhCliStatus()
+  const versions = useAvailableGhVersions()
+  const installMutation = useInstallGhCli()
+  const [progress, resetProgress] = useGhInstallProgress()
+
+  const needsSetup = !status.isLoading && !status.data?.installed
+
+  // Wrapper to support install with options (e.g., onSuccess callback)
+  const install = (
+    version: string,
+    options?: { onSuccess?: () => void; onError?: (error: Error) => void }
+  ) => {
+    logger.info('[useGhCliSetup] install() called', {
+      version,
+      isPending: installMutation.isPending,
+    })
+
+    // Reset progress before starting new installation to prevent stale state
+    resetProgress()
+
+    logger.info('[useGhCliSetup] Calling installMutation.mutate()', { version })
+    installMutation.mutate(version, {
+      onSuccess: () => {
+        logger.info('[useGhCliSetup] mutate onSuccess callback')
+        options?.onSuccess?.()
+      },
+      onError: error => {
+        logger.error('[useGhCliSetup] mutate onError callback', { error })
+        options?.onError?.(error)
+      },
+    })
+  }
+
+  return {
+    status: status.data,
+    isStatusLoading: status.isLoading,
+    versions: versions.data ?? [],
+    isVersionsLoading: versions.isLoading,
+    needsSetup,
+    isInstalling: installMutation.isPending,
+    installError: installMutation.error,
+    progress,
+    install,
+    refetchStatus: status.refetch,
+  }
+}

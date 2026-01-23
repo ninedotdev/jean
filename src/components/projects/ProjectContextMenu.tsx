@@ -1,0 +1,179 @@
+import {
+  Code,
+  ExternalLink,
+  Folder,
+  FolderOpen,
+  Home,
+  LayoutGrid,
+  Plus,
+  Settings,
+  Terminal,
+  Trash2,
+} from 'lucide-react'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import { isBaseSession, type Project } from '@/types/projects'
+import {
+  useCreateBaseSession,
+  useCreateWorktree,
+  useOpenProjectOnGitHub,
+  useOpenProjectWorktreesFolder,
+  useOpenWorktreeInEditor,
+  useOpenWorktreeInFinder,
+  useOpenWorktreeInTerminal,
+  useRemoveProject,
+  useWorktrees,
+} from '@/services/projects'
+import { usePreferences } from '@/services/preferences'
+import { useProjectsStore } from '@/store/projects-store'
+import { useUIStore } from '@/store/ui-store'
+import { getEditorLabel, getTerminalLabel } from '@/types/preferences'
+
+interface ProjectContextMenuProps {
+  project: Project
+  children: React.ReactNode
+}
+
+export function ProjectContextMenu({
+  project,
+  children,
+}: ProjectContextMenuProps) {
+  const createWorktree = useCreateWorktree()
+  const createBaseSession = useCreateBaseSession()
+  const removeProject = useRemoveProject()
+  const openOnGitHub = useOpenProjectOnGitHub()
+  const openInFinder = useOpenWorktreeInFinder()
+  const openWorktreesFolder = useOpenProjectWorktreesFolder()
+  const openInTerminal = useOpenWorktreeInTerminal()
+  const openInEditor = useOpenWorktreeInEditor()
+  const { data: worktrees = [] } = useWorktrees(project.id)
+  const { data: preferences } = usePreferences()
+  const { openProjectSettings } = useProjectsStore()
+  const openSessionBoardModal = useUIStore(state => state.openSessionBoardModal)
+
+  // Check if base session already exists
+  const existingBaseSession = worktrees.find(isBaseSession)
+
+  const handleOpenInFinder = () => {
+    openInFinder.mutate(project.path)
+  }
+
+  const handleOpenWorktreesFolder = () => {
+    openWorktreesFolder.mutate(project.name)
+  }
+
+  const handleOpenInTerminal = () => {
+    openInTerminal.mutate({
+      worktreePath: project.path,
+      terminal: preferences?.terminal,
+    })
+  }
+
+  const handleOpenInEditor = () => {
+    openInEditor.mutate({
+      worktreePath: project.path,
+      editor: preferences?.editor,
+    })
+  }
+
+  const handleNewWorktree = () => {
+    createWorktree.mutate({ projectId: project.id })
+  }
+
+  const handleNewBaseSession = () => {
+    createBaseSession.mutate(project.id)
+  }
+
+  const handleRemoveProject = () => {
+    removeProject.mutate(project.id)
+  }
+
+  const handleOpenOnGitHub = () => {
+    openOnGitHub.mutate(project.id)
+  }
+
+  const handleOpenSettings = () => {
+    openProjectSettings(project.id)
+  }
+
+  const handleOpenSessionBoard = () => {
+    openSessionBoardModal(project.id)
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-64">
+        <ContextMenuItem onClick={handleOpenSettings}>
+          <Settings className="mr-2 h-4 w-4" />
+          Project Settings
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleOpenSessionBoard}>
+          <LayoutGrid className="mr-2 h-4 w-4" />
+          Session Board
+        </ContextMenuItem>
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={handleNewBaseSession}>
+          <Home className="mr-2 h-4 w-4" />
+          {existingBaseSession ? 'Open Base Session' : 'New Base Session'}
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleNewWorktree}>
+          <Plus className="mr-2 h-4 w-4" />
+          New Worktree
+        </ContextMenuItem>
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem onClick={handleOpenInEditor}>
+          <Code className="mr-2 h-4 w-4" />
+          Open in {getEditorLabel(preferences?.editor)}
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleOpenInFinder}>
+          <FolderOpen className="mr-2 h-4 w-4" />
+          Open in Finder
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleOpenWorktreesFolder}>
+          <Folder className="mr-2 h-4 w-4" />
+          Open Worktrees Folder
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleOpenInTerminal}>
+          <Terminal className="mr-2 h-4 w-4" />
+          Open in {getTerminalLabel(preferences?.terminal)}
+        </ContextMenuItem>
+
+        <ContextMenuItem onClick={handleOpenOnGitHub}>
+          <ExternalLink className="mr-2 h-4 w-4" />
+          Open on GitHub
+        </ContextMenuItem>
+
+        <ContextMenuSeparator />
+
+        <ContextMenuItem
+          variant="destructive"
+          onClick={handleRemoveProject}
+          disabled={worktrees.length > 0}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          Remove Project
+          {worktrees.length > 0 && (
+            <span className="ml-auto text-xs opacity-60">
+              ({worktrees.length} worktrees)
+            </span>
+          )}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}

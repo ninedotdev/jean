@@ -1,0 +1,66 @@
+import { useState, useCallback } from 'react'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden'
+
+interface ImageLightboxProps {
+  /** File path to the image */
+  src: string
+  /** Alt text for accessibility */
+  alt: string
+  /** Thumbnail className */
+  thumbnailClassName?: string
+  /** Optional wrapper className */
+  className?: string
+  /** Children to render as the clickable thumbnail (if not using default img) */
+  children?: React.ReactNode
+}
+
+/**
+ * Displays an image thumbnail that opens in a full-size lightbox modal when clicked
+ */
+export function ImageLightbox({
+  src,
+  alt,
+  thumbnailClassName,
+  className,
+  children,
+}: ImageLightboxProps) {
+  const [isOpen, setIsOpen] = useState(false)
+
+  const handleOpen = useCallback(() => {
+    setIsOpen(true)
+  }, [])
+
+  const assetSrc = convertFileSrc(src)
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={handleOpen}
+        className={`cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 rounded-md ${className ?? ''}`}
+      >
+        {children ?? (
+          <img src={assetSrc} alt={alt} className={thumbnailClassName} />
+        )}
+      </button>
+
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogContent
+          className="!max-w-[calc(100vw-4rem)] !w-[calc(100vw-4rem)] max-h-[85vh] p-4 bg-background/95 backdrop-blur-sm"
+          showCloseButton={true}
+        >
+          <VisuallyHidden>
+            <DialogTitle>Image Preview</DialogTitle>
+          </VisuallyHidden>
+          <img
+            src={assetSrc}
+            alt={alt}
+            className="max-w-full max-h-[calc(85vh-4rem)] object-contain rounded-md mx-auto"
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}

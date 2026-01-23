@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "setup": "bun i && bun run tauri:dev"
+  }
+}
