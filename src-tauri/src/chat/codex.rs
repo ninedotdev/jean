@@ -190,30 +190,141 @@ pub fn execute_codex_detached(
             }
         };
 
-        // Extract event type from JSON
+        // Extract event type from JSON (OpenAI Responses API format)
         let event_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
+        log::debug!("Codex event type: {event_type}");
+
         match event_type {
-            // Handle message events with text content
+            // Handle streaming text deltas (main content stream)
+            "response.output_text.delta" => {
+                if let Some(delta) = msg.get("delta").and_then(|v| v.as_str()) {
+                    full_content.push_str(delta);
+
+                    let _ = app.emit(
+                        "chat:chunk",
+                        ChunkEvent {
+                            session_id: session_id.to_string(),
+                            worktree_id: worktree_id.to_string(),
+                            content: delta.to_string(),
+                        },
+                    );
+                }
+            }
+            // Handle content part deltas (alternative format)
+            "response.content_part.delta" => {
+                if let Some(delta) = msg.get("delta").and_then(|d| d.get("text")).and_then(|v| v.as_str()) {
+                    full_content.push_str(delta);
+
+                    let _ = app.emit(
+                        "chat:chunk",
+                        ChunkEvent {
+                            session_id: session_id.to_string(),
+                            worktree_id: worktree_id.to_string(),
+                            content: delta.to_string(),
+                        },
+                    );
+                }
+            }
+            // Handle completed output items (function calls, final text)
+            "response.output_item.done" => {
+                if let Some(item) = msg.get("item") {
+                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                    match item_type {
+                        "message" => {
+                            // Extract text from message content
+                            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                                for block in content {
+                                    if block.get("type").and_then(|t| t.as_str()) == Some("output_text") {
+                                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                            // Only emit if we haven't already streamed this content
+                                            if !full_content.contains(text) {
+                                                full_content.push_str(text);
+                                                let _ = app.emit(
+                                                    "chat:chunk",
+                                                    ChunkEvent {
+                                                        session_id: session_id.to_string(),
+                                                        worktree_id: worktree_id.to_string(),
+                                                        content: text.to_string(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "function_call" => {
+                            let id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let arguments = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+                            let input: serde_json::Value = serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
+
+                            log::trace!("Codex tool use: {name} with id {id}");
+
+                            let _ = app.emit(
+                                "chat:tool_use",
+                                serde_json::json!({
+                                    "session_id": session_id,
+                                    "worktree_id": worktree_id,
+                                    "id": id,
+                                    "name": name,
+                                    "input": input,
+                                }),
+                            );
+                        }
+                        _ => {
+                            // Try to get text from item directly
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                if !text.is_empty() && !full_content.contains(text) {
+                                    full_content.push_str(text);
+                                    let _ = app.emit(
+                                        "chat:chunk",
+                                        ChunkEvent {
+                                            session_id: session_id.to_string(),
+                                            worktree_id: worktree_id.to_string(),
+                                            content: text.to_string(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Handle response completion
+            "response.done" | "response.completed" => {
+                log::trace!("Codex response completed");
+                // Response is done, content should already be accumulated
+            }
+            // Handle error events
+            "error" => {
+                let error_msg = msg.get("error")
+                    .and_then(|e| e.get("message").and_then(|m| m.as_str()))
+                    .or_else(|| msg.get("error").and_then(|e| e.as_str()))
+                    .or_else(|| msg.get("message").and_then(|m| m.as_str()))
+                    .unwrap_or("Unknown error");
+
+                log::error!("Codex error event: {error_msg}");
+                let _ = app.emit(
+                    "chat:error",
+                    ErrorEvent {
+                        session_id: session_id.to_string(),
+                        worktree_id: worktree_id.to_string(),
+                        error: error_msg.to_string(),
+                    },
+                );
+            }
+            // Handle message events (legacy/alternative format)
             "message" | "assistant" => {
-                // Try to get content from different JSON structures
                 let content = msg
                     .get("content")
                     .and_then(|v| v.as_str())
                     .or_else(|| {
                         msg.get("message")
                             .and_then(|m| m.get("content"))
-                            .and_then(|c| {
-                                // Handle array of content blocks
-                                if let Some(arr) = c.as_array() {
-                                    for block in arr {
-                                        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                            return block.get("text").and_then(|t| t.as_str());
-                                        }
-                                    }
-                                }
-                                c.as_str()
-                            })
+                            .and_then(|c| c.as_str())
                     });
 
                 if let Some(text) = content {
@@ -229,83 +340,20 @@ pub fn execute_codex_detached(
                     );
                 }
             }
-            // Handle response.output_item.done events (OpenAI streaming format)
-            "response.output_item.done" => {
-                if let Some(item) = msg.get("item") {
-                    // Handle text output
-                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                        full_content.push_str(text);
-
-                        let _ = app.emit(
-                            "chat:chunk",
-                            ChunkEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                content: text.to_string(),
-                            },
-                        );
-                    }
-                    // Handle function call output
-                    if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
-                        let id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let arguments = item.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
-                        let input: serde_json::Value = serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
-
-                        log::trace!("Codex tool use: {name} with id {id}");
-
-                        let _ = app.emit(
-                            "chat:tool_use",
-                            serde_json::json!({
-                                "session_id": session_id,
-                                "worktree_id": worktree_id,
-                                "id": id,
-                                "name": name,
-                                "input": input,
-                            }),
-                        );
-                    }
-                }
-            }
-            // Handle result events (final output)
-            "result" | "response.done" => {
-                if let Some(result) = msg.get("result").and_then(|v| v.as_str()) {
-                    if full_content.is_empty() {
-                        full_content = result.to_string();
-
-                        let _ = app.emit(
-                            "chat:chunk",
-                            ChunkEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                content: result.to_string(),
-                            },
-                        );
-                    }
-                }
-            }
-            // Handle error events
-            "error" => {
-                if let Some(error) = msg.get("error").and_then(|v| v.as_str()) {
-                    log::error!("Codex error event: {error}");
-                    let _ = app.emit(
-                        "chat:error",
-                        ErrorEvent {
-                            session_id: session_id.to_string(),
-                            worktree_id: worktree_id.to_string(),
-                            error: error.to_string(),
-                        },
-                    );
-                }
+            // Skip non-content events
+            "response.created" | "response.in_progress" | "response.output_item.added"
+            | "response.content_part.added" | "rate_limits.updated" => {
+                log::trace!("Skipping Codex event: {event_type}");
             }
             // Handle other/unknown event types - try to extract any content
             _ => {
                 // Try common content fields
                 let content = msg
-                    .get("text")
-                    .or_else(|| msg.get("content"))
-                    .or_else(|| msg.get("output"))
-                    .and_then(|v| v.as_str());
+                    .get("delta")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| msg.get("text").and_then(|v| v.as_str()))
+                    .or_else(|| msg.get("content").and_then(|v| v.as_str()))
+                    .or_else(|| msg.get("output").and_then(|v| v.as_str()));
 
                 if let Some(text) = content {
                     full_content.push_str(text);

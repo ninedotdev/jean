@@ -109,7 +109,7 @@ pub fn execute_gemini_detached(
 
     // Accumulate content from streaming response
     let mut full_content = String::new();
-    let mut tool_calls = Vec::new();
+    let tool_calls = Vec::new();
 
     // Process each line as it comes (JSONL format)
     for line_result in reader.lines() {
