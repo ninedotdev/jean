@@ -72,6 +72,16 @@ impl ThinkingLevel {
             ThinkingLevel::Ultrathink => Some(31_999),
         }
     }
+
+    /// Get string representation for CLI flags
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThinkingLevel::Off => "off",
+            ThinkingLevel::Think => "think",
+            ThinkingLevel::Megathink => "megathink",
+            ThinkingLevel::Ultrathink => "ultrathink",
+        }
+    }
 }
 
 /// A tool call made by Claude during a response
@@ -258,6 +268,9 @@ pub struct Session {
     /// Claude CLI session ID for resuming conversations
     #[serde(default)]
     pub claude_session_id: Option<String>,
+    /// Selected AI provider for this session (claude, gemini, codex)
+    #[serde(default)]
+    pub selected_provider: Option<String>,
     /// Selected model for this session
     #[serde(default)]
     pub selected_model: Option<String>,
@@ -315,6 +328,7 @@ impl Session {
             messages: vec![],
             message_count: None,
             claude_session_id: None,
+            selected_provider: None,
             selected_model: None,
             selected_thinking_level: None,
             session_naming_completed: false,
@@ -447,6 +461,7 @@ impl SessionMetadata {
             messages: vec![], // Loaded separately from JSONL files
             message_count: Some(self.to_index_entry().message_count),
             claude_session_id: self.claude_session_id.clone(),
+            selected_provider: self.selected_provider.clone(),
             selected_model: self.selected_model.clone(),
             selected_thinking_level: self.selected_thinking_level.clone(),
             session_naming_completed: self.session_naming_completed,
@@ -467,6 +482,7 @@ impl SessionMetadata {
         self.name = session.name.clone();
         self.order = session.order;
         self.claude_session_id = session.claude_session_id.clone();
+        self.selected_provider = session.selected_provider.clone();
         self.selected_model = session.selected_model.clone();
         self.selected_thinking_level = session.selected_thinking_level.clone();
         self.session_naming_completed = session.session_naming_completed;
@@ -698,6 +714,9 @@ pub struct SessionMetadata {
     /// Claude CLI session ID for resuming conversations
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
+    /// Selected AI provider for this session (claude, gemini, codex)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_provider: Option<String>,
     /// Selected model for this session
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_model: Option<String>,
@@ -805,6 +824,7 @@ impl SessionMetadata {
                 .unwrap_or_default()
                 .as_secs(),
             claude_session_id: None,
+            selected_provider: None,
             selected_model: None,
             selected_thinking_level: None,
             session_naming_completed: false,
