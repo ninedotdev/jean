@@ -349,7 +349,8 @@ export function ChatWindow() {
   // Use live status if available, otherwise fall back to cached
   const behindCount =
     gitStatus?.behind_count ?? worktree?.cached_behind_count ?? 0
-  const aheadCount = gitStatus?.ahead_count ?? worktree?.cached_ahead_count ?? 0
+  const aheadCount =
+    gitStatus?.unpushed_count ?? worktree?.cached_unpushed_count ?? 0
   const hasBranchUpdates = behindCount > 0
   // Diff stats with cached fallback
   const uncommittedAdded =
@@ -371,6 +372,7 @@ export function ChatWindow() {
   const checkStatus =
     prStatus?.check_status ??
     (worktree?.cached_check_status as CheckStatus | undefined)
+  const mergeableStatus = prStatus?.mergeable ?? undefined
 
   // Run script for this worktree (used by CMD+R keybinding)
   const { data: runScript } = useRunScript(activeWorktreePath ?? null)
@@ -1152,6 +1154,7 @@ export function ChatWindow() {
     handleReview,
     handleMerge,
     handleResolveConflicts,
+    handleResolvePrConflicts,
     executeMerge,
     showMergeDialog,
     setShowMergeDialog,
@@ -1943,18 +1946,16 @@ Begin your investigation now.`
                     <div className="mx-auto max-w-7xl px-4 py-4 md:px-6 min-w-0 w-full">
                       <div className="select-text space-y-4 font-mono text-sm min-w-0 break-words overflow-x-auto">
                         {/* Debug info (dev mode only) */}
-                        {isDev &&
-                          activeWorktreeId &&
-                          activeWorktreePath &&
-                          activeSessionId && (
-                            <div className="text-[0.625rem] text-muted-foreground/50 bg-muted/30 rounded font-mono">
-                              <SessionDebugPanel
-                                worktreeId={activeWorktreeId}
-                                worktreePath={activeWorktreePath}
-                                sessionId={activeSessionId}
-                              />
-                            </div>
-                          )}
+                        {isDev && activeWorktreeId && activeWorktreePath && activeSessionId && (
+                          <div className="text-[0.625rem] text-muted-foreground/50 bg-muted/30 rounded font-mono">
+                            <SessionDebugPanel
+                              worktreeId={activeWorktreeId}
+                              worktreePath={activeWorktreePath}
+                              sessionId={activeSessionId}
+                              onFileClick={setViewingFilePath}
+                            />
+                          </div>
+                        )}
                         {/* Setup script output from jean.json */}
                         {setupScriptResult && activeWorktreeId && (
                           <SetupScriptOutput
@@ -2196,6 +2197,7 @@ Begin your investigation now.`
                         prNumber={worktree?.pr_number}
                         displayStatus={displayStatus}
                         checkStatus={checkStatus}
+                        mergeableStatus={mergeableStatus}
                         magicModalShortcut={magicModalShortcut}
                         activeWorktreePath={activeWorktreePath}
                         worktreeId={activeWorktreeId ?? null}
@@ -2209,9 +2211,9 @@ Begin your investigation now.`
                         onOpenPr={handleOpenPr}
                         onReview={handleReview}
                         onMerge={handleMerge}
-                        isBaseSession={
-                          worktree ? isBaseSession(worktree) : true
-                        }
+                        onResolvePrConflicts={handleResolvePrConflicts}
+                        onResolveConflicts={handleResolveConflicts}
+                        isBaseSession={worktree ? isBaseSession(worktree) : true}
                         hasOpenPr={Boolean(worktree?.pr_url)}
                         onSetDiffRequest={setDiffRequest}
                         onProviderChange={handleToolbarProviderChange}

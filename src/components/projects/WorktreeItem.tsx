@@ -62,14 +62,9 @@ export function WorktreeItem({
   const { data: gitStatus } = useGitStatus(worktree.id)
   const behindCount =
     gitStatus?.behind_count ?? worktree.cached_behind_count ?? 0
-  const worktreeAheadCount =
-    gitStatus?.worktree_ahead_count ?? worktree.cached_worktree_ahead_count ?? 0
-  const baseBranchAheadCount =
-    gitStatus?.base_branch_ahead_count ??
-    worktree.cached_base_branch_ahead_count ??
-    0
-  // For base sessions, show base branch unpushed; for worktrees, show worktree unpushed
-  const pushCount = isBase ? baseBranchAheadCount : worktreeAheadCount
+  const unpushedCount =
+    gitStatus?.unpushed_count ?? worktree.cached_unpushed_count ?? 0
+  const pushCount = unpushedCount
 
   // Uncommitted changes (working directory)
   const uncommittedAdded =
@@ -339,12 +334,28 @@ export function WorktreeItem({
         fetchWorktreesStatus(projectId)
         toast.success('Changes pulled', { id: toastId })
       } catch (error) {
-        toast.error(`Pull failed: ${error}`, { id: toastId })
+        const errorStr = String(error)
+        if (errorStr.includes('Merge conflicts in:')) {
+          toast.warning('Pull resulted in conflicts', {
+            id: toastId,
+            description: 'Opening conflict resolution...',
+          })
+          // Select this worktree and trigger resolve-conflicts via magic command
+          selectWorktree(worktree.id)
+          // Small delay to ensure worktree is selected before dispatching
+          setTimeout(() => {
+            window.dispatchEvent(
+              new CustomEvent('magic-command', { detail: { command: 'resolve-conflicts' } })
+            )
+          }, 100)
+        } else {
+          toast.error(`Pull failed: ${error}`, { id: toastId })
+        }
       } finally {
         clearWorktreeLoading(worktree.id)
       }
     },
-    [worktree.path, defaultBranch, projectId]
+    [worktree.id, worktree.path, defaultBranch, projectId, selectWorktree]
   )
 
   const handlePush = useCallback(

@@ -502,6 +502,7 @@ pub async fn create_worktree(
         cached_base_branch_ahead_count: None,
         cached_base_branch_behind_count: None,
         cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
         order: 0, // Placeholder, actual order is set in background thread
         archived_at: None,
         ai_provider: None,
@@ -582,59 +583,72 @@ pub async fn create_worktree(
             return;
         }
 
-        // Check if branch already exists
-        if git::branch_exists(&project_path, &name_clone) {
-            log::trace!("Background: Branch already exists: {name_clone}");
+        // For PR context, we use a temp branch + gh pr checkout pattern
+        // For other cases, check if branch already exists
+        let (branch_for_worktree, temp_branch_to_delete, actual_branch_name) = if let Some(ref ctx) = pr_context_clone {
+            // Use temp branch for PR checkout pattern
+            let temp_branch = format!(
+                "pr-{}-temp-{}",
+                ctx.number,
+                uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("xxxx")
+            );
+            (temp_branch.clone(), Some(temp_branch), ctx.head_ref_name.clone())
+        } else {
+            // Check if branch already exists for non-PR cases
+            if git::branch_exists(&project_path, &name_clone) {
+                log::trace!("Background: Branch already exists: {name_clone}");
 
-            // Generate a suggested alternative name with incremented suffix
-            let suggested_name = {
-                let data = load_projects_data(&app_clone).ok();
-                let mut counter = 2;
-                loop {
-                    let candidate = format!("{name_clone}-{counter}");
-                    let name_in_storage = data
-                        .as_ref()
-                        .map(|d| d.worktree_name_exists(&project_id_clone, &candidate))
-                        .unwrap_or(false);
-                    let branch_in_git = git::branch_exists(&project_path, &candidate);
+                // Generate a suggested alternative name with incremented suffix
+                let suggested_name = {
+                    let data = load_projects_data(&app_clone).ok();
+                    let mut counter = 2;
+                    loop {
+                        let candidate = format!("{name_clone}-{counter}");
+                        let name_in_storage = data
+                            .as_ref()
+                            .map(|d| d.worktree_name_exists(&project_id_clone, &candidate))
+                            .unwrap_or(false);
+                        let branch_in_git = git::branch_exists(&project_path, &candidate);
 
-                    if !name_in_storage && !branch_in_git {
-                        break candidate;
+                        if !name_in_storage && !branch_in_git {
+                            break candidate;
+                        }
+                        counter += 1;
                     }
-                    counter += 1;
+                };
+
+                // Emit branch_exists event
+                let branch_exists_event = WorktreeBranchExistsEvent {
+                    id: worktree_id_clone.clone(),
+                    project_id: project_id_clone.clone(),
+                    branch: name_clone.clone(),
+                    suggested_name,
+                    issue_context: issue_context_clone.clone(),
+                    pr_context: pr_context_clone.clone(),
+                };
+                if let Err(e) = app_clone.emit("worktree:branch_exists", &branch_exists_event) {
+                    log::error!("Failed to emit worktree:branch_exists event: {e}");
                 }
-            };
 
-            // Emit branch_exists event
-            let branch_exists_event = WorktreeBranchExistsEvent {
-                id: worktree_id_clone.clone(),
-                project_id: project_id_clone.clone(),
-                branch: name_clone.clone(),
-                suggested_name,
-                issue_context: issue_context_clone.clone(),
-                pr_context: pr_context_clone.clone(),
-            };
-            if let Err(e) = app_clone.emit("worktree:branch_exists", &branch_exists_event) {
-                log::error!("Failed to emit worktree:branch_exists event: {e}");
+                // Also emit error event to remove the pending worktree from UI
+                let error_event = WorktreeCreateErrorEvent {
+                    id: worktree_id_clone,
+                    project_id: project_id_clone,
+                    error: format!("Branch already exists: {name_clone}"),
+                };
+                if let Err(e) = app_clone.emit("worktree:error", &error_event) {
+                    log::error!("Failed to emit worktree:error event: {e}");
+                }
+                return;
             }
-
-            // Also emit error event to remove the pending worktree from UI
-            let error_event = WorktreeCreateErrorEvent {
-                id: worktree_id_clone,
-                project_id: project_id_clone,
-                error: format!("Branch already exists: {name_clone}"),
-            };
-            if let Err(e) = app_clone.emit("worktree:error", &error_event) {
-                log::error!("Failed to emit worktree:error event: {e}");
-            }
-            return;
-        }
+            (name_clone.clone(), None, name_clone.clone())
+        };
 
         // Create the git worktree (this is the slow operation)
         if let Err(e) = git::create_worktree(
             &project_path,
             &worktree_path_clone,
-            &name_clone,
+            &branch_for_worktree,
             &base_clone,
         ) {
             log::error!("Background: Failed to create worktree: {e}");
@@ -650,6 +664,46 @@ pub async fn create_worktree(
         }
 
         log::trace!("Background: Git worktree created successfully");
+
+        // For PR context, run gh pr checkout to get the actual PR branch
+        let final_branch = if let Some(ref ctx) = pr_context_clone {
+            log::trace!("Background: Running gh pr checkout {} for PR branch", ctx.number);
+
+            match git::gh_pr_checkout(&worktree_path_clone, ctx.number, Some(&ctx.head_ref_name)) {
+                Ok(branch) => {
+                    log::trace!("Background: gh pr checkout succeeded, branch: {branch}");
+
+                    // Delete the temporary branch
+                    if let Some(ref temp_branch) = temp_branch_to_delete {
+                        if let Err(e) = git::delete_branch(&project_path, temp_branch) {
+                            log::warn!("Background: Failed to delete temp branch {temp_branch}: {e}");
+                            // Not fatal, continue anyway
+                        }
+                    }
+
+                    branch
+                }
+                Err(e) => {
+                    log::error!("Background: Failed to checkout PR: {e}");
+                    // Clean up the worktree we created
+                    let _ = git::remove_worktree(&project_path, &worktree_path_clone);
+                    if let Some(ref temp_branch) = temp_branch_to_delete {
+                        let _ = git::delete_branch(&project_path, temp_branch);
+                    }
+                    let error_event = WorktreeCreateErrorEvent {
+                        id: worktree_id_clone,
+                        project_id: project_id_clone,
+                        error: e,
+                    };
+                    if let Err(emit_err) = app_clone.emit("worktree:error", &error_event) {
+                        log::error!("Failed to emit worktree:error event: {emit_err}");
+                    }
+                    return;
+                }
+            }
+        } else {
+            actual_branch_name
+        };
 
         // Write issue context file if provided (to shared git-context directory)
         if let Some(ctx) = &issue_context_clone {
@@ -752,7 +806,7 @@ pub async fn create_worktree(
                     match git::run_setup_script(
                         &worktree_path_clone,
                         &project_path,
-                        &name_clone,
+                        &final_branch,
                         &script,
                     ) {
                         Ok(output) => (Some(output), Some(script)),
@@ -760,7 +814,7 @@ pub async fn create_worktree(
                             log::error!("Background: Setup script failed: {e}");
                             // Clean up: remove the worktree since setup failed
                             let _ = git::remove_worktree(&project_path, &worktree_path_clone);
-                            let _ = git::delete_branch(&project_path, &name_clone);
+                            let _ = git::delete_branch(&project_path, &final_branch);
                             let error_event = WorktreeCreateErrorEvent {
                                 id: worktree_id_clone,
                                 project_id: project_id_clone,
@@ -796,12 +850,12 @@ pub async fn create_worktree(
                 project_id: project_id_clone.clone(),
                 name: name_clone.clone(),
                 path: worktree_path_clone.clone(),
-                branch: name_clone,
+                branch: final_branch,
                 created_at,
                 setup_output,
                 setup_script,
                 session_type: SessionType::Worktree,
-                pr_number: None,
+                pr_number: pr_context_clone.as_ref().map(|ctx| ctx.number),
                 pr_url: None,
                 cached_pr_status: None,
                 cached_check_status: None,
@@ -815,6 +869,7 @@ pub async fn create_worktree(
                 cached_base_branch_ahead_count: None,
                 cached_base_branch_behind_count: None,
                 cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
                 order: max_order + 1,
                 archived_at: None,
                 ai_provider: None,
@@ -936,6 +991,7 @@ pub async fn create_worktree_from_existing_branch(
         cached_base_branch_ahead_count: None,
         cached_base_branch_behind_count: None,
         cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
         order: 0, // Placeholder, actual order is set in background thread
         archived_at: None,
         ai_provider: None,
@@ -1150,6 +1206,7 @@ pub async fn create_worktree_from_existing_branch(
                 cached_base_branch_ahead_count: None,
                 cached_base_branch_behind_count: None,
                 cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
                 order: max_order + 1,
                 archived_at: None,
                 ai_provider: None,
@@ -1311,6 +1368,7 @@ pub async fn checkout_pr(
         cached_base_branch_ahead_count: None,
         cached_base_branch_behind_count: None,
         cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
         order: 0, // Will be updated in background thread
         archived_at: None,
         ai_provider: None,
@@ -1361,7 +1419,8 @@ pub async fn checkout_pr(
 
         // Step 2: Run gh pr checkout inside the worktree
         // This checks out the actual PR branch and sets up tracking
-        let actual_branch = match git::gh_pr_checkout(&worktree_path_clone, pr_number) {
+        // Pass the PR's head_ref_name to ensure local branch matches remote
+        let actual_branch = match git::gh_pr_checkout(&worktree_path_clone, pr_number, Some(&pr_head_ref)) {
             Ok(branch) => {
                 log::trace!("Background: gh pr checkout succeeded, branch: {branch}");
                 branch
@@ -1391,6 +1450,41 @@ pub async fn checkout_pr(
         }
 
         log::trace!("Background: Git worktree ready with PR #{pr_number} on branch {actual_branch}");
+
+        // Check for jean.json and run setup script
+        let (setup_output, setup_script) =
+            if let Some(config) = git::read_jean_config(&worktree_path_clone) {
+                if let Some(script) = config.scripts.setup {
+                    log::trace!("Background: Found jean.json with setup script, executing...");
+                    match git::run_setup_script(
+                        &worktree_path_clone,
+                        &project_path,
+                        &actual_branch,
+                        &script,
+                    ) {
+                        Ok(output) => (Some(output), Some(script)),
+                        Err(e) => {
+                            log::error!("Background: Setup script failed: {e}");
+                            // Clean up: remove the worktree since setup failed
+                            let _ = git::remove_worktree(&project_path, &worktree_path_clone);
+                            let _ = git::delete_branch(&project_path, &actual_branch);
+                            let error_event = WorktreeCreateErrorEvent {
+                                id: worktree_id_clone,
+                                project_id: project_id_clone,
+                                error: format!("Setup script failed: {e}"),
+                            };
+                            if let Err(emit_err) = app_clone.emit("worktree:error", &error_event) {
+                                log::error!("Failed to emit worktree:error event: {emit_err}");
+                            }
+                            return;
+                        }
+                    }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
 
         // Write PR context file to shared git-context directory
         if let Ok(repo_id) = get_repo_identifier(&project_path) {
@@ -1466,8 +1560,8 @@ pub async fn checkout_pr(
                 path: worktree_path_clone.clone(),
                 branch: actual_branch.clone(),
                 created_at,
-                setup_output: None,
-                setup_script: None,
+                setup_output,
+                setup_script,
                 session_type: SessionType::Worktree,
                 pr_number: Some(pr_number),
                 pr_url: None,
@@ -1483,6 +1577,7 @@ pub async fn checkout_pr(
                 cached_base_branch_ahead_count: None,
                 cached_base_branch_behind_count: None,
                 cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
                 order: max_order + 1,
                 archived_at: None,
                 ai_provider: None,
@@ -2016,6 +2111,7 @@ pub async fn create_base_session(app: AppHandle, project_id: String) -> Result<W
         cached_base_branch_ahead_count: None,
         cached_base_branch_behind_count: None,
         cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
         order: 0, // Base sessions are always first
         archived_at: None,
         ai_provider: None,
@@ -2317,6 +2413,7 @@ pub async fn import_worktree(
         cached_base_branch_ahead_count: None,
         cached_base_branch_behind_count: None,
         cached_worktree_ahead_count: None,
+            cached_unpushed_count: None,
         order: max_order + 1,
         archived_at: None,
         ai_provider: None,
@@ -3528,6 +3625,7 @@ pub async fn update_worktree_cached_status(
     base_branch_ahead_count: Option<u32>,
     base_branch_behind_count: Option<u32>,
     worktree_ahead_count: Option<u32>,
+    unpushed_count: Option<u32>,
 ) -> Result<(), String> {
     log::trace!("Updating cached status for worktree {worktree_id}");
 
@@ -3572,6 +3670,9 @@ pub async fn update_worktree_cached_status(
     }
     if worktree_ahead_count.is_some() {
         worktree.cached_worktree_ahead_count = worktree_ahead_count;
+    }
+    if unpushed_count.is_some() {
+        worktree.cached_unpushed_count = unpushed_count;
     }
     worktree.cached_status_at = Some(
         std::time::SystemTime::now()
@@ -4840,6 +4941,92 @@ pub async fn get_merge_conflicts(
     })
 }
 
+/// Fetch the base branch and merge it into the current worktree branch.
+///
+/// Used when a PR has merge conflicts on GitHub. This creates the conflict
+/// state locally so the user can resolve conflicts with AI assistance.
+/// If the merge is clean (no conflicts), the merge commit is kept.
+#[tauri::command]
+pub async fn fetch_and_merge_base(
+    app: AppHandle,
+    worktree_id: String,
+) -> Result<MergeConflictsResponse, String> {
+    log::trace!("Fetching base branch and merging into worktree: {worktree_id}");
+
+    let data = load_projects_data(&app)?;
+    let worktree = data
+        .find_worktree(&worktree_id)
+        .ok_or_else(|| format!("Worktree not found: {worktree_id}"))?;
+    let project = data
+        .find_project(&worktree.project_id)
+        .ok_or_else(|| format!("Project not found: {}", worktree.project_id))?;
+
+    let base_branch = &project.default_branch;
+    let worktree_path = &worktree.path;
+
+    // Fetch the latest base branch from origin
+    let fetch_output = std::process::Command::new("git")
+        .args(["fetch", "origin", base_branch])
+        .current_dir(worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to fetch origin: {e}"))?;
+
+    if !fetch_output.status.success() {
+        let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+        return Err(format!("Failed to fetch origin/{base_branch}: {stderr}"));
+    }
+
+    // Merge origin/<base_branch> into current branch
+    let merge_output = std::process::Command::new("git")
+        .args(["merge", &format!("origin/{base_branch}")])
+        .current_dir(worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to merge: {e}"))?;
+
+    // Check if merge succeeded cleanly
+    if merge_output.status.success() {
+        return Ok(MergeConflictsResponse {
+            has_conflicts: false,
+            conflicts: vec![],
+            conflict_diff: String::new(),
+        });
+    }
+
+    // Merge failed — check for conflict files
+    let conflict_output = std::process::Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .current_dir(worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to check conflicts: {e}"))?;
+
+    let conflicts: Vec<String> = String::from_utf8_lossy(&conflict_output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if conflicts.is_empty() {
+        // Merge failed but no conflict markers — unexpected error
+        let stderr = String::from_utf8_lossy(&merge_output.stderr);
+        return Err(format!("Merge failed: {stderr}"));
+    }
+
+    // Get the diff with conflict markers
+    let diff_output = std::process::Command::new("git")
+        .args(["diff"])
+        .current_dir(worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to get conflict diff: {e}"))?;
+
+    let conflict_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
+
+    Ok(MergeConflictsResponse {
+        has_conflicts: true,
+        conflicts,
+        conflict_diff,
+    })
+}
+
 /// Result of the archive cleanup operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupResult {
@@ -5478,6 +5665,7 @@ pub async fn fetch_worktrees_status(app: AppHandle, project_id: String) -> Resul
                             w.cached_uncommitted_removed = Some(status.uncommitted_removed);
                             w.cached_branch_diff_added = Some(status.branch_diff_added);
                             w.cached_branch_diff_removed = Some(status.branch_diff_removed);
+                            w.cached_unpushed_count = Some(status.unpushed_count);
                             w.cached_status_at = Some(status.checked_at);
 
                             if let Err(e) = save_projects_data(&app_clone, &data) {
