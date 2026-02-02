@@ -14,12 +14,8 @@ interface FolderTreeItemProps {
 }
 
 export function FolderTreeItem({ folder, children, depth, isDropTarget }: FolderTreeItemProps) {
-  const {
-    expandedFolderIds,
-    toggleFolderExpanded,
-    editingFolderId,
-    setEditingFolderId,
-  } = useProjectsStore()
+  const expandedFolderIds = useProjectsStore(state => state.expandedFolderIds)
+  const editingFolderId = useProjectsStore(state => state.editingFolderId)
   const isExpanded = expandedFolderIds.has(folder.id)
 
   // Derive editing state from store - survives re-renders from query invalidation
@@ -46,21 +42,24 @@ export function FolderTreeItem({ folder, children, depth, isDropTarget }: Folder
   }, [isEditing])
 
   const handleClick = useCallback(() => {
+    const { toggleFolderExpanded } = useProjectsStore.getState()
     toggleFolderExpanded(folder.id)
-  }, [folder.id, toggleFolderExpanded])
+  }, [folder.id])
 
   const handleChevronClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
+      const { toggleFolderExpanded } = useProjectsStore.getState()
       toggleFolderExpanded(folder.id)
     },
-    [folder.id, toggleFolderExpanded]
+    [folder.id]
   )
 
   const startEditing = useCallback(() => {
     setEditName(folder.name)
+    const { setEditingFolderId } = useProjectsStore.getState()
     setEditingFolderId(folder.id)
-  }, [folder.name, folder.id, setEditingFolderId])
+  }, [folder.name, folder.id])
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -83,9 +82,10 @@ export function FolderTreeItem({ folder, children, depth, isDropTarget }: Folder
       if (trimmedName && trimmedName !== folder.name) {
         renameFolder.mutate({ folderId: folder.id, name: trimmedName })
       }
+      const { setEditingFolderId } = useProjectsStore.getState()
       setEditingFolderId(null)
     },
-    [editName, folder.name, folder.id, renameFolder, setEditingFolderId]
+    [editName, folder.name, folder.id, renameFolder]
   )
 
   const handleKeyDown = useCallback(
@@ -97,10 +97,11 @@ export function FolderTreeItem({ folder, children, depth, isDropTarget }: Folder
         handleSubmitRename(false)
       } else if (e.key === 'Escape') {
         setEditName(folder.name)
+        const { setEditingFolderId } = useProjectsStore.getState()
         setEditingFolderId(null)
       }
     },
-    [handleSubmitRename, folder.name, setEditingFolderId]
+    [handleSubmitRename, folder.name]
   )
 
   return (

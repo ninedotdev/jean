@@ -23,11 +23,11 @@ export interface PathConflictData {
     number: number
     title: string
     body?: string
-    comments: Array<{
+    comments: {
       author: { login: string }
       body: string
       createdAt: string
-    }>
+    }[]
   }
 }
 
@@ -41,11 +41,11 @@ export interface BranchConflictData {
     number: number
     title: string
     body?: string
-    comments: Array<{
+    comments: {
       author: { login: string }
       body: string
       createdAt: string
-    }>
+    }[]
   }
   /** PR context to pass when creating a new worktree */
   prContext?: {
@@ -54,25 +54,29 @@ export interface BranchConflictData {
     body?: string
     headRefName: string
     baseRefName: string
-    comments: Array<{
+    comments: {
       author: { login: string }
       body: string
       createdAt: string
-    }>
-    reviews: Array<{
+    }[]
+    reviews: {
       author: { login: string }
       body: string
       state: string
       submittedAt: string
-    }>
+    }[]
     diff?: string
   }
 }
+
+export type RightPanelTab = 'files' | 'changes' | 'checks'
 
 interface UIState {
   leftSidebarVisible: boolean
   leftSidebarSize: number // Width in pixels, persisted across sessions
   rightSidebarVisible: boolean
+  rightSidebarSize: number // Width in pixels, persisted across sessions
+  activeRightPanelTab: RightPanelTab
   commandPaletteOpen: boolean
   preferencesOpen: boolean
   preferencesPane: PreferencePane | null
@@ -98,12 +102,18 @@ interface UIState {
   autoInvestigatePRWorktreeIds: Set<string>
   /** Project ID for the Session Board modal (null = closed) */
   sessionBoardProjectId: string | null
+  /** Clone repo modal open state */
+  cloneRepoModalOpen: boolean
+  /** Clone repo modal provider (github or gitlab) */
+  cloneRepoModalProvider: 'github' | 'gitlab' | null
 
   toggleLeftSidebar: () => void
   setLeftSidebarVisible: (visible: boolean) => void
   setLeftSidebarSize: (size: number) => void
   toggleRightSidebar: () => void
   setRightSidebarVisible: (visible: boolean) => void
+  setRightSidebarSize: (size: number) => void
+  setActiveRightPanelTab: (tab: RightPanelTab) => void
   toggleCommandPalette: () => void
   setCommandPaletteOpen: (open: boolean) => void
   togglePreferences: () => void
@@ -130,6 +140,8 @@ interface UIState {
   consumeAutoInvestigatePR: (worktreeId: string) => boolean
   openSessionBoardModal: (projectId: string) => void
   closeSessionBoardModal: () => void
+  openCloneRepoModal: (provider?: 'github' | 'gitlab') => void
+  closeCloneRepoModal: () => void
 }
 
 export const useUIStore = create<UIState>()(
@@ -137,7 +149,9 @@ export const useUIStore = create<UIState>()(
     set => ({
       leftSidebarVisible: true,
       leftSidebarSize: 250, // Default width in pixels
-      rightSidebarVisible: false,
+      rightSidebarVisible: true,
+      rightSidebarSize: 280, // Default width in pixels
+      activeRightPanelTab: 'files',
       commandPaletteOpen: false,
       preferencesOpen: false,
       preferencesPane: null,
@@ -158,6 +172,8 @@ export const useUIStore = create<UIState>()(
       autoInvestigateWorktreeIds: new Set(),
       autoInvestigatePRWorktreeIds: new Set(),
       sessionBoardProjectId: null,
+      cloneRepoModalOpen: false,
+      cloneRepoModalProvider: null,
 
       toggleLeftSidebar: () =>
         set(
@@ -189,6 +205,12 @@ export const useUIStore = create<UIState>()(
           undefined,
           'setRightSidebarVisible'
         ),
+
+      setRightSidebarSize: size =>
+        set({ rightSidebarSize: size }, undefined, 'setRightSidebarSize'),
+
+      setActiveRightPanelTab: tab =>
+        set({ activeRightPanelTab: tab }, undefined, 'setActiveRightPanelTab'),
 
       toggleCommandPalette: () =>
         set(
@@ -295,8 +317,8 @@ export const useUIStore = create<UIState>()(
         ),
 
       consumeAutoInvestigate: worktreeId => {
-        const state = useUIStore.getState()
-        if (state.autoInvestigateWorktreeIds.has(worktreeId)) {
+        const currentState = useUIStore.getState()
+        if (currentState.autoInvestigateWorktreeIds.has(worktreeId)) {
           set(
             state => {
               const newSet = new Set(state.autoInvestigateWorktreeIds)
@@ -324,8 +346,8 @@ export const useUIStore = create<UIState>()(
         ),
 
       consumeAutoInvestigatePR: worktreeId => {
-        const state = useUIStore.getState()
-        if (state.autoInvestigatePRWorktreeIds.has(worktreeId)) {
+        const currentState = useUIStore.getState()
+        if (currentState.autoInvestigatePRWorktreeIds.has(worktreeId)) {
           set(
             state => {
               const newSet = new Set(state.autoInvestigatePRWorktreeIds)
@@ -345,6 +367,20 @@ export const useUIStore = create<UIState>()(
 
       closeSessionBoardModal: () =>
         set({ sessionBoardProjectId: null }, undefined, 'closeSessionBoardModal'),
+
+      openCloneRepoModal: provider =>
+        set(
+          { cloneRepoModalOpen: true, cloneRepoModalProvider: provider ?? null },
+          undefined,
+          'openCloneRepoModal'
+        ),
+
+      closeCloneRepoModal: () =>
+        set(
+          { cloneRepoModalOpen: false, cloneRepoModalProvider: null },
+          undefined,
+          'closeCloneRepoModal'
+        ),
     }),
     {
       name: 'ui-store',

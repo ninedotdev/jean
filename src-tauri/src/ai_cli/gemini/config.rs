@@ -87,6 +87,7 @@ pub fn get_gemini_cli_path() -> Result<PathBuf, String> {
 }
 
 /// Get the npm package name for Gemini CLI
+#[allow(dead_code)]
 pub fn get_npm_package_name() -> &'static str {
     "@anthropic-ai/claude-code" // Placeholder - replace with actual Gemini CLI package when available
 }

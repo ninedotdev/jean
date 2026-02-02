@@ -4,12 +4,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   GitBranch,
   GitPullRequest,
-  Loader2,
   RefreshCw,
   Search,
   AlertCircle,
   Wand2,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -273,7 +273,7 @@ export function CheckoutPRModal() {
           <ScrollArea className="flex-1">
             {isLoadingPRs && (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <Spinner size={20} />
                 <span className="ml-2 text-sm text-muted-foreground">
                   Loading pull requests...
                 </span>
@@ -299,7 +299,7 @@ export function CheckoutPRModal() {
 
             {!isLoadingPRs && !prsError && filteredPRs.length === 0 && isSearchingPRs && (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Spinner size={16} />
                 <span className="ml-2 text-sm text-muted-foreground">
                   Searching GitHub...
                 </span>
@@ -322,7 +322,7 @@ export function CheckoutPRModal() {
                 ))}
                 {isSearchingPRs && (
                   <div className="flex items-center justify-center py-2">
-                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                    <Spinner size={12} />
                     <span className="ml-1.5 text-xs text-muted-foreground">
                       Searching GitHub for more results...
                     </span>
@@ -370,7 +370,7 @@ function CheckoutPRItem({
       )}
     >
       {isCheckingOut ? (
-        <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground flex-shrink-0" />
+        <Spinner size={16} className="mt-0.5 flex-shrink-0" />
       ) : (
         <GitPullRequest
           className={cn(

@@ -3,6 +3,7 @@ mod codex;
 mod commands;
 pub mod detached;
 mod gemini;
+mod kimi;
 mod naming;
 pub mod registry;
 pub mod run_log;

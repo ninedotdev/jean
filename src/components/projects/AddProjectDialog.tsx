@@ -13,7 +13,8 @@ import { useProjectsStore } from '@/store/projects-store'
 import { useAddProject, useInitProject, isTauri } from '@/services/projects'
 
 export function AddProjectDialog() {
-  const { addProjectDialogOpen, addProjectParentFolderId, setAddProjectDialogOpen } = useProjectsStore()
+  const addProjectDialogOpen = useProjectsStore(state => state.addProjectDialogOpen)
+  const addProjectParentFolderId = useProjectsStore(state => state.addProjectParentFolderId)
   const addProject = useAddProject()
   const initProject = useInitProject()
 
@@ -41,6 +42,7 @@ export function AddProjectDialog() {
             path: selected,
             parentId: addProjectParentFolderId ?? undefined,
           })
+          const { setAddProjectDialogOpen } = useProjectsStore.getState()
           setAddProjectDialogOpen(false)
         } catch (error) {
           // Check if error is "not a git repository"
@@ -70,7 +72,7 @@ export function AddProjectDialog() {
       }
       // Other errors handled by mutation
     }
-  }, [addProject, addProjectParentFolderId, setAddProjectDialogOpen])
+  }, [addProject, addProjectParentFolderId])
 
   const handleInitNew = useCallback(async () => {
     if (!isTauri()) {
@@ -93,6 +95,7 @@ export function AddProjectDialog() {
           path: selected,
           parentId: addProjectParentFolderId ?? undefined,
         })
+        const { setAddProjectDialogOpen } = useProjectsStore.getState()
         setAddProjectDialogOpen(false)
       }
     } catch (error) {
@@ -102,10 +105,15 @@ export function AddProjectDialog() {
       }
       // Other errors handled by mutation
     }
-  }, [initProject, addProjectParentFolderId, setAddProjectDialogOpen])
+  }, [initProject, addProjectParentFolderId])
+
+  const handleOpenChange = useCallback((open: boolean) => {
+    const { setAddProjectDialogOpen } = useProjectsStore.getState()
+    setAddProjectDialogOpen(open)
+  }, [])
 
   return (
-    <Dialog open={addProjectDialogOpen} onOpenChange={setAddProjectDialogOpen}>
+    <Dialog open={addProjectDialogOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New Project</DialogTitle>

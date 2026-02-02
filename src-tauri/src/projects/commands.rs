@@ -131,6 +131,108 @@ pub async fn add_project(
     Ok(project)
 }
 
+/// Clone a repository from GitHub or GitLab and register it as a project
+///
+/// This command:
+/// 1. Gets the workspace folder from preferences
+/// 2. Clones the repository to {workspace}/{repo_name}
+/// 3. Registers the cloned repo as a project
+#[tauri::command]
+pub async fn clone_repository(
+    app: AppHandle,
+    clone_url: String,
+    repo_name: String,
+    provider: String,
+    parent_id: Option<String>,
+    use_ssh: bool,
+) -> Result<Project, String> {
+    log::trace!(
+        "Cloning repository: {} (provider: {}, use_ssh: {})",
+        repo_name,
+        provider,
+        use_ssh
+    );
+
+    // Load preferences to get workspace folder
+    let prefs = crate::load_preferences(app.clone())
+        .await
+        .map_err(|e| format!("Failed to load preferences: {e}"))?;
+
+    // Get workspace base directory
+    let workspace_folder = if prefs.workspace_folder.is_empty() {
+        None
+    } else {
+        Some(prefs.workspace_folder.as_str())
+    };
+
+    let base_dir = super::storage::get_worktrees_base_dir_with_config(workspace_folder)?;
+    let clone_path = base_dir.join(&repo_name);
+
+    // Check if directory already exists
+    if clone_path.exists() {
+        return Err(format!(
+            "Directory already exists: {}",
+            clone_path.display()
+        ));
+    }
+
+    // Run git clone
+    log::trace!("Cloning to: {}", clone_path.display());
+
+    let output = Command::new("git")
+        .args(["clone", &clone_url, clone_path.to_string_lossy().as_ref()])
+        .output()
+        .map_err(|e| format!("Failed to run git clone: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log::error!("git clone failed: {}", stderr);
+
+        // Clean up partial clone if it exists
+        if clone_path.exists() {
+            let _ = std::fs::remove_dir_all(&clone_path);
+        }
+
+        return Err(format!("git clone failed: {stderr}"));
+    }
+
+    log::trace!("Clone completed, registering project");
+
+    // Now add the cloned repo as a project
+    let clone_path_str = clone_path.to_string_lossy().to_string();
+
+    // Get repository info
+    let name = git::get_repo_name(&clone_path_str)?;
+    let default_branch = git::get_current_branch(&clone_path_str)?;
+
+    // Check if project already exists (shouldn't happen but just in case)
+    let mut data = load_projects_data(&app)?;
+    if data.projects.iter().any(|p| p.path == clone_path_str) {
+        return Err(format!("Project already exists: {clone_path_str}"));
+    }
+
+    // Create project with order at the end of the specified parent level
+    let max_order = data.get_next_order(parent_id.as_deref());
+    let project = Project {
+        id: Uuid::new_v4().to_string(),
+        name,
+        path: clone_path_str,
+        default_branch,
+        added_at: now(),
+        order: max_order,
+        parent_id,
+        is_folder: false,
+        avatar_path: None,
+        git_provider: Some(provider),
+    };
+
+    data.add_project(project.clone());
+    save_projects_data(&app, &data)?;
+
+    log::trace!("Successfully cloned and registered project: {}", project.name);
+    Ok(project)
+}
+
 /// Initialize git in an existing folder (without adding to project list)
 ///
 /// This command:

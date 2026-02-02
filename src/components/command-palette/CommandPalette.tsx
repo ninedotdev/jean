@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/command'
 
 export function CommandPalette() {
-  const { commandPaletteOpen, setCommandPaletteOpen } = useUIStore()
+  const commandPaletteOpen = useUIStore(state => state.commandPaletteOpen)
   const { data: preferences } = usePreferences()
   const commandContext = useCommandContext(preferences)
   const [search, setSearch] = useState('')
@@ -40,6 +40,7 @@ export function CommandPalette() {
   // Handle command execution
   const handleCommandSelect = useCallback(
     async (commandId: string) => {
+      const { setCommandPaletteOpen } = useUIStore.getState()
       setCommandPaletteOpen(false)
       setSearch('') // Clear search when closing
 
@@ -49,18 +50,19 @@ export function CommandPalette() {
         commandContext.showToast(result.error, 'error')
       }
     },
-    [commandContext, setCommandPaletteOpen]
+    [commandContext]
   )
 
   // Handle dialog open/close with search clearing
   const handleOpenChange = useCallback(
     (open: boolean) => {
+      const { setCommandPaletteOpen } = useUIStore.getState()
       setCommandPaletteOpen(open)
       if (!open) {
         setSearch('') // Clear search when closing
       }
     },
-    [setCommandPaletteOpen]
+    []
   )
 
   // Keyboard shortcut handler
@@ -68,13 +70,14 @@ export function CommandPalette() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
+        const { commandPaletteOpen, setCommandPaletteOpen } = useUIStore.getState()
         setCommandPaletteOpen(!commandPaletteOpen)
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [commandPaletteOpen, setCommandPaletteOpen])
+  }, [])
 
   return (
     <CommandDialog

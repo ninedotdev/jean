@@ -1,14 +1,22 @@
-import { Loader2Icon } from 'lucide-react'
+import { Metronome } from 'ldrs/react'
+import 'ldrs/react/Metronome.css'
 
-import { cn } from '@/lib/utils'
+interface SpinnerProps {
+  className?: string
+  size?: number | string
+  color?: string
+  speed?: number | string
+}
 
-function Spinner({ className, ...props }: React.ComponentProps<'svg'>) {
+function Spinner({ size = 16, color, speed = 1.6 }: SpinnerProps) {
+  // Use CSS variable for color if not specified
+  const spinnerColor = color ?? 'hsl(var(--muted-foreground))'
+
   return (
-    <Loader2Icon
-      role="status"
-      aria-label="Loading"
-      className={cn('size-4 animate-spin', className)}
-      {...props}
+    <Metronome
+      size={String(size)}
+      speed={String(speed)}
+      color={spinnerColor}
     />
   )
 }

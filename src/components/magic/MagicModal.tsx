@@ -97,7 +97,7 @@ const KEY_TO_OPTION: Record<string, MagicOption> = {
 }
 
 export function MagicModal() {
-  const { magicModalOpen, setMagicModalOpen } = useUIStore()
+  const magicModalOpen = useUIStore(state => state.magicModalOpen)
   const selectedWorktreeId = useProjectsStore(state => state.selectedWorktreeId)
   const { data: worktree } = useWorktree(selectedWorktreeId)
   const hasInitializedRef = useRef(false)
@@ -129,15 +129,17 @@ export function MagicModal() {
         setSelectedOption('save-context')
         hasInitializedRef.current = true
       }
+      const { setMagicModalOpen } = useUIStore.getState()
       setMagicModalOpen(open)
     },
-    [setMagicModalOpen]
+    []
   )
 
   const selectedProjectId = useProjectsStore(state => state.selectedProjectId)
 
   const executeAction = useCallback(
     (option: MagicOption) => {
+      const { setMagicModalOpen, setCheckoutPRModalOpen } = useUIStore.getState()
       // checkout-pr only needs a project selected, not a worktree
       // Handle it directly here since ChatWindow may not be rendered
       if (option === 'checkout-pr') {
@@ -147,7 +149,7 @@ export function MagicModal() {
           return
         }
         // Open the checkout PR modal directly
-        useUIStore.getState().setCheckoutPRModalOpen(true)
+        setCheckoutPRModalOpen(true)
         setMagicModalOpen(false)
         return
       }
@@ -172,7 +174,7 @@ export function MagicModal() {
 
       setMagicModalOpen(false)
     },
-    [selectedWorktreeId, selectedProjectId, setMagicModalOpen, worktree?.pr_url]
+    [selectedWorktreeId, selectedProjectId, worktree?.pr_url]
   )
 
   // Handle keyboard navigation

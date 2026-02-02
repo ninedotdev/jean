@@ -2,12 +2,12 @@ import { useState } from 'react'
 import {
   CheckCircle2,
   Circle,
-  Loader2,
   ChevronRight,
   ListTodo,
   XCircle,
   X,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import type { Todo } from '@/types/chat'
 import { cn } from '@/lib/utils'
 import {
@@ -46,8 +46,8 @@ export function TodoWidget({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className={className}>
       <div
         className={cn(
-          'my-1 rounded-md border border-border/50 bg-muted/30',
-          isOpen && 'bg-muted/50'
+          'my-1 rounded-md border border-border/50 bg-sidebar',
+          isOpen && 'bg-sidebar'
         )}
       >
         <div className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
@@ -61,7 +61,7 @@ export function TodoWidget({
             {!isOpen &&
             !allCompleted &&
             (isStreaming || todos.some(t => t.status === 'in_progress')) ? (
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+              <Spinner size={16} className="text-primary" />
             ) : (
               <ListTodo className="h-4 w-4 shrink-0" />
             )}
@@ -115,7 +115,7 @@ function TodoItem({ todo }: TodoItemProps) {
         ) : todo.status === 'cancelled' ? (
           <XCircle className="h-4 w-4 text-amber-500" />
         ) : todo.status === 'in_progress' ? (
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          <Spinner size={16} className="text-primary" />
         ) : (
           <Circle className="h-4 w-4 text-muted-foreground/50" />
         )}

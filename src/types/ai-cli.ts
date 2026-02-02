@@ -5,7 +5,7 @@
  */
 
 /** Available AI CLI providers */
-export type AiCliProvider = 'claude' | 'gemini' | 'codex'
+export type AiCliProvider = 'claude' | 'gemini' | 'codex' | 'kimi'
 
 /** AI CLI provider display information */
 export const aiProviderOptions: {
@@ -27,6 +27,11 @@ export const aiProviderOptions: {
     value: 'codex',
     label: 'OpenAI',
     description: 'Codex CLI from OpenAI',
+  },
+  {
+    value: 'kimi',
+    label: 'Kimi',
+    description: 'Kimi Code CLI from Moonshot AI',
   },
 ]
 

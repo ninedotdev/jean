@@ -2,6 +2,7 @@
 export type KeybindingAction =
   | 'focus_chat_input'
   | 'toggle_left_sidebar'
+  | 'toggle_right_sidebar'
   | 'open_preferences'
   | 'open_commit_modal'
   | 'open_pull_request'
@@ -40,6 +41,7 @@ export interface KeybindingDefinition {
 export const DEFAULT_KEYBINDINGS: KeybindingsMap = {
   focus_chat_input: 'mod+l',
   toggle_left_sidebar: 'mod+b',
+  toggle_right_sidebar: 'mod+shift+b',
   open_preferences: 'mod+comma',
   open_commit_modal: 'mod+shift+c',
   open_pull_request: 'mod+shift+p',
@@ -73,6 +75,13 @@ export const KEYBINDING_DEFINITIONS: KeybindingDefinition[] = [
     label: 'Toggle left sidebar',
     description: 'Show or hide the projects sidebar',
     default_shortcut: 'mod+b',
+    category: 'navigation',
+  },
+  {
+    action: 'toggle_right_sidebar',
+    label: 'Toggle right sidebar',
+    description: 'Show or hide the right panel with files and changes',
+    default_shortcut: 'mod+shift+b',
     category: 'navigation',
   },
   {

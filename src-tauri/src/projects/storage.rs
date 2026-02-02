@@ -64,6 +64,7 @@ pub fn get_worktrees_base_dir_with_config(workspace_folder: Option<&str>) -> Res
 }
 
 /// Get the default workspace folder path for display purposes
+#[allow(dead_code)]
 pub fn get_default_workspace_folder() -> Result<String, String> {
     let home_dir = dirs::home_dir().ok_or_else(|| "Failed to get home directory".to_string())?;
     Ok(home_dir.join("jean").to_string_lossy().to_string())

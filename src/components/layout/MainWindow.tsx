@@ -2,6 +2,7 @@ import { useMemo, useCallback, useRef } from 'react'
 import { TitleBar } from '@/components/titlebar/TitleBar'
 import { DevModeBanner } from './DevModeBanner'
 import { LeftSideBar } from './LeftSideBar'
+import { RightSideBar } from './RightSideBar'
 import { SidebarWidthProvider } from './SidebarWidthContext'
 import { MainWindowContent } from './MainWindowContent'
 import { CommandPalette } from '@/components/command-palette/CommandPalette'
@@ -18,6 +19,7 @@ import { PathConflictModal } from '@/components/worktree/PathConflictModal'
 import { BranchConflictModal } from '@/components/worktree/BranchConflictModal'
 import { SessionBoardModal } from '@/components/session-board'
 import { GitInitModal } from '@/components/projects/GitInitModal'
+import { CloneRepoModal } from '@/components/projects/CloneRepoModal'
 import { QuitConfirmationDialog } from './QuitConfirmationDialog'
 import { Toaster } from '@/components/ui/sonner'
 import { useUIStore } from '@/store/ui-store'
@@ -43,10 +45,17 @@ import { useChatStore } from '@/store/chat-store'
 const MIN_SIDEBAR_WIDTH = 150
 const MAX_SIDEBAR_WIDTH = 500
 
+// Right sidebar resize constraints (pixels)
+const MIN_RIGHT_SIDEBAR_WIDTH = 200
+const MAX_RIGHT_SIDEBAR_WIDTH = 600
+
 export function MainWindow() {
   const leftSidebarVisible = useUIStore(state => state.leftSidebarVisible)
   const leftSidebarSize = useUIStore(state => state.leftSidebarSize)
   const setLeftSidebarSize = useUIStore(state => state.setLeftSidebarSize)
+  const rightSidebarVisible = useUIStore(state => state.rightSidebarVisible)
+  const rightSidebarSize = useUIStore(state => state.rightSidebarSize)
+  const setRightSidebarSize = useUIStore(state => state.setRightSidebarSize)
   const selectedWorktreeId = useProjectsStore(state => state.selectedWorktreeId)
 
   // Fetch worktree data for polling initialization
@@ -103,8 +112,9 @@ export function MainWindow() {
   // Persist session-specific state (answered questions, fixed findings, etc.)
   useSessionStatePersistence()
 
-  // Ref for the sidebar element to update width directly during drag
+  // Refs for the sidebar elements to update width directly during drag
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const rightSidebarRef = useRef<HTMLDivElement>(null)
 
   // Debug: log sidebar state on each render
   console.log('[MainWindow] render', {
@@ -174,22 +184,57 @@ export function MainWindow() {
     [leftSidebarSize, setLeftSidebarSize]
   )
 
+  // Handle custom resize for right sidebar (pixel-based)
+  // Similar to left sidebar but drag direction is inverted
+  const handleRightResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startWidth = rightSidebarSize
+      let currentWidth = startWidth
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        // Dragging left increases width (sidebar is on right)
+        const delta = startX - moveEvent.clientX
+        currentWidth = Math.min(
+          MAX_RIGHT_SIDEBAR_WIDTH,
+          Math.max(MIN_RIGHT_SIDEBAR_WIDTH, startWidth + delta)
+        )
+        // Update DOM directly for smooth resize (no React re-render)
+        if (rightSidebarRef.current) {
+          rightSidebarRef.current.style.width = `${currentWidth}px`
+        }
+      }
+
+      const handleMouseUp = () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+        // Commit final width to Zustand state
+        setRightSidebarSize(currentWidth)
+      }
+
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+    },
+    [rightSidebarSize, setRightSidebarSize]
+  )
+
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden rounded-xl bg-background">
+    <div className="flex h-screen w-full flex-col overflow-hidden bg-sidebar">
       {/* Dev Mode Banner */}
       <DevModeBanner />
 
       {/* Title Bar */}
       <TitleBar title={windowTitle} />
 
-      {/* Main Content Area */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar with pixel-based width - only render after UI state is initialized */}
+      {/* Main Content Area - padding and gap for floating/inset effect */}
+      <div className="flex flex-1 gap-2 overflow-hidden p-2">
+        {/* Left Sidebar with floating style */}
         {leftSidebarVisible && isInitialized && (
           <SidebarWidthProvider value={leftSidebarSize}>
             <div
               ref={sidebarRef}
-              className="h-full overflow-hidden"
+              className="h-full overflow-hidden rounded-lg border border-sidebar-border shadow-sm"
               style={{ width: leftSidebarSize }}
             >
               <LeftSideBar />
@@ -208,10 +253,35 @@ export function MainWindow() {
           </div>
         )}
 
-        {/* Main Content - flex-1 to fill remaining space */}
-        <div className="min-w-0 flex-1 overflow-hidden">
+        {/* Main Content - inset style with rounded corners and shadow */}
+        <div className="min-w-0 flex-1 overflow-hidden rounded-xl bg-background shadow-sm">
           <MainWindowContent />
         </div>
+
+        {/* Custom resize handle for right sidebar */}
+        {rightSidebarVisible && isInitialized && selectedWorktreeId && worktree && (
+          <div
+            className="relative h-full w-px hover:bg-border"
+            onMouseDown={handleRightResizeStart}
+          >
+            {/* Invisible wider hit area for easier clicking */}
+            <div className="absolute inset-y-0 -left-1.5 -right-1.5 cursor-col-resize" />
+          </div>
+        )}
+
+        {/* Right Sidebar with floating style */}
+        {rightSidebarVisible && isInitialized && selectedWorktreeId && worktree && (
+          <div
+            ref={rightSidebarRef}
+            className="h-full overflow-hidden rounded-lg border border-sidebar-border shadow-sm"
+            style={{ width: rightSidebarSize }}
+          >
+            <RightSideBar
+              worktreeId={selectedWorktreeId}
+              worktreePath={worktree.path}
+            />
+          </div>
+        )}
       </div>
 
       {/* Global UI Components (hidden until triggered) */}
@@ -229,6 +299,7 @@ export function MainWindow() {
       <BranchConflictModal />
       <SessionBoardModal />
       <GitInitModal />
+      <CloneRepoModal />
       <QuitConfirmationDialog />
       <Toaster
         position="bottom-right"

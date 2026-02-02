@@ -226,7 +226,7 @@ export async function removeIssueContext(
   issueNumber: number,
   projectPath: string
 ): Promise<void> {
-  return invoke<void>('remove_issue_context', {
+  await invoke('remove_issue_context', {
     worktreeId,
     issueNumber,
     projectPath,
@@ -358,7 +358,7 @@ export async function removePRContext(
   prNumber: number,
   projectPath: string
 ): Promise<void> {
-  return invoke<void>('remove_pr_context', {
+  await invoke('remove_pr_context', {
     worktreeId,
     prNumber,
     projectPath,
@@ -541,7 +541,7 @@ export async function attachSavedContext(
  * Remove an attached saved context from a worktree
  */
 export async function removeSavedContext(worktreeId: string, slug: string): Promise<void> {
-  return invoke<void>('remove_saved_context', {
+  await invoke('remove_saved_context', {
     worktreeId,
     slug,
   })

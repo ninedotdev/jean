@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
-import { FileIcon, Loader2 } from 'lucide-react'
+import { FileIcon } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { invoke } from '@tauri-apps/api/core'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -82,7 +83,7 @@ export function FileMentionBadge({ path, worktreePath }: FileMentionBadgeProps) 
           <ScrollArea className="h-[calc(85vh-6rem)] mt-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Spinner size={24} className="text-muted-foreground" />
               </div>
             ) : error ? (
               <div className="text-sm text-destructive p-3">

@@ -19,9 +19,9 @@ import {
   MessageSquare,
   FileCode,
   ChevronRight,
-  Loader2,
   Wrench,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import type { ReviewFinding, ReviewResponse } from '@/types/projects'
 import { cn } from '@/lib/utils'
 
@@ -241,7 +241,7 @@ const FindingCard = memo(function FindingCard({
                   <Button onClick={handleFix} disabled={isFixing} size="sm">
                     {isFixing ? (
                       <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Spinner size={14} />
                         Fixing...
                       </>
                     ) : isFixed ? (
@@ -286,14 +286,11 @@ export function ReviewResultsPanel({ worktreeId }: ReviewResultsPanelProps) {
 
   const clearReviewResults = useChatStore(state => state.clearReviewResults)
 
-  // Check if a finding is fixed
-  const isFindingFixed = useCallback(
-    (finding: ReviewFinding, index: number) => {
-      const key = getReviewFindingKey(finding, index)
-      return fixedReviewFindings?.has(key) ?? false
-    },
-    [fixedReviewFindings]
-  )
+  // Helper to check if a finding is fixed (for render)
+  const isFixed = (finding: ReviewFinding, index: number) => {
+    const key = getReviewFindingKey(finding, index)
+    return fixedReviewFindings?.has(key) ?? false
+  }
 
   // Handle fixing a single finding
   const handleFixFinding = useCallback(
@@ -357,13 +354,15 @@ Please apply this fix to the file.`
     setIsFixingAll(true)
 
     try {
-      // Get unfixed, fixable findings
+      // Get unfixed, fixable findings - use getState() for stable callback
+      const { fixedReviewFindings } = useChatStore.getState()
+      const currentFixed = fixedReviewFindings[worktreeId]
       const unfixedFindings = reviewResults.findings
         .map((finding, index) => ({ finding, index }))
-        .filter(
-          ({ finding, index }) =>
-            finding.severity !== 'praise' && !isFindingFixed(finding, index)
-        )
+        .filter(({ finding, index }) => {
+          const key = getReviewFindingKey(finding, index)
+          return finding.severity !== 'praise' && !(currentFixed?.has(key) ?? false)
+        })
 
       if (unfixedFindings.length === 0) return
 
@@ -408,7 +407,7 @@ Please apply all these fixes to the codebase.`
     } finally {
       setIsFixingAll(false)
     }
-  }, [reviewResults, activeWorktreePath, worktreeId, isFindingFixed])
+  }, [reviewResults, activeWorktreePath, worktreeId])
 
   if (!reviewResults) {
     return <EmptyState />
@@ -428,11 +427,11 @@ Please apply all these fixes to the codebase.`
 
   // Count fixable findings (exclude praise)
   const fixableFindings = reviewResults.findings.filter(
-    (f, i) => f.severity !== 'praise' && !isFindingFixed(f, i)
+    (f, i) => f.severity !== 'praise' && !isFixed(f, i)
   )
   const unfixedCount = fixableFindings.length
   const fixedCount = reviewResults.findings.filter(
-    (f, i) => f.severity !== 'praise' && isFindingFixed(f, i)
+    (f, i) => f.severity !== 'praise' && isFixed(f, i)
   ).length
 
   return (
@@ -477,7 +476,7 @@ Please apply all these fixes to the codebase.`
               >
                 {isFixingAll ? (
                   <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size={14} />
                     Fixing...
                   </>
                 ) : (
@@ -543,7 +542,7 @@ Please apply all these fixes to the codebase.`
                   key={getReviewFindingKey(finding, originalIndex)}
                   finding={finding}
                   index={originalIndex}
-                  isFixed={isFindingFixed(finding, originalIndex)}
+                  isFixed={isFixed(finding, originalIndex)}
                   isFixing={fixingIndices.has(originalIndex)}
                   onFix={handleFixFinding}
                 />

@@ -93,7 +93,7 @@ export const ToolCallsDisplay = memo(function ToolCallsDisplay({
   if (toolCalls.length === 0) return null
 
   return (
-    <div className="mb-2 space-y-1">
+    <div className="space-y-1">
       {/* Tool calls (collapsible) - Edit tools are shown separately at the bottom */}
       {otherTools.length > 0 && (
         <>

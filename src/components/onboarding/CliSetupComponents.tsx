@@ -5,7 +5,8 @@
  * and the individual CLI reinstall modal.
  */
 
-import { Download, CheckCircle2, Loader2, AlertCircle } from 'lucide-react'
+import { Download, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -58,7 +59,7 @@ export function SetupState({
         </label>
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <Spinner size={16} />
             Loading versions...
           </div>
         ) : (
@@ -118,7 +119,7 @@ export function InstallingState({ cliName, progress }: InstallingStateProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-col items-center gap-4">
-        <Loader2 className="size-10 animate-spin text-primary" />
+        <Spinner size={40} />
         <div className="text-center">
           <p className="font-medium">{message}</p>
           <p className="text-sm text-muted-foreground mt-1">

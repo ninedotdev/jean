@@ -9,7 +9,6 @@ import {
 } from 'react'
 import {
   FileText,
-  Loader2,
   AlertCircle,
   RefreshCw,
   Columns2,
@@ -19,6 +18,7 @@ import {
   Pencil,
   X,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { FileDiff } from '@pierre/diffs/react'
 import {
   parsePatchFiles,
@@ -281,7 +281,7 @@ const CommentInputBar = memo(function CommentInputBar({
         type="button"
         onClick={handleSubmit}
         disabled={!inputValue.trim()}
-        className="px-2 py-1 bg-black text-white dark:bg-yellow-500 dark:text-black hover:bg-black/80 dark:hover:bg-yellow-400 rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        className="px-2 py-1 bg-black text-white dark:bg-teal-500 dark:text-black hover:bg-black/80 dark:hover:bg-teal-400 rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Add
       </button>
@@ -724,7 +724,7 @@ export function GitDiffModal({
                   <button
                     type="button"
                     onClick={handleExecutePrompt}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white dark:bg-yellow-500 dark:text-black hover:bg-black/80 dark:hover:bg-yellow-400 rounded-md text-xs font-medium transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white dark:bg-teal-500 dark:text-black hover:bg-black/80 dark:hover:bg-teal-400 rounded-md text-xs font-medium transition-colors"
                   >
                     <Play className="h-3.5 w-3.5" />
                     Execute ({comments.length})
@@ -734,7 +734,7 @@ export function GitDiffModal({
                   <button
                     type="button"
                     onClick={handleAddToPrompt}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white dark:bg-yellow-500 dark:text-black hover:bg-black/80 dark:hover:bg-yellow-400 rounded-md text-xs font-medium transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white dark:bg-teal-500 dark:text-black hover:bg-black/80 dark:hover:bg-teal-400 rounded-md text-xs font-medium transition-colors"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                     Add to prompt
@@ -779,7 +779,7 @@ export function GitDiffModal({
         {/* Loading state - centered across full modal */}
         {isLoading && !hasFiles && (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin mr-2" />
+            <Spinner size={20} className="mr-2" />
             Loading diff...
           </div>
         )}

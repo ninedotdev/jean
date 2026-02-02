@@ -246,6 +246,177 @@ pub struct ReadTextResponse {
 }
 
 // ============================================================================
+// TodoWrite Types
+// ============================================================================
+
+/// A single todo item from TodoWrite tool
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // Used for serde deserialization from Claude CLI TodoWrite tool
+pub struct Todo {
+    /// The todo content (what needs to be done)
+    pub content: String,
+    /// Present continuous form shown during execution
+    #[serde(rename = "activeForm")]
+    pub active_form: String,
+    /// Current status of the todo
+    pub status: String,
+}
+
+// ============================================================================
+// Claude Task Types
+// ============================================================================
+
+/// A single task from Claude Task tool
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // Planned feature for task management
+pub struct ClaudeTask {
+    pub id: String,
+    pub subject: String,
+    pub description: String,
+    pub active_form: String,
+    pub status: String, // 'pending' | 'in_progress' | 'completed'
+    pub blocks: Vec<String>,
+    pub blocked_by: Vec<String>,
+}
+
+// ============================================================================
+// Multi-Model Delegation Types
+// ============================================================================
+
+/// A task with an assigned AI provider/model for multi-model delegation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegatedTask {
+    /// Unique task identifier
+    pub id: String,
+    /// Task description from the plan
+    pub description: String,
+    /// Assigned AI provider (claude, gemini, codex)
+    pub assigned_provider: String,
+    /// Assigned model within the provider
+    pub assigned_model: String,
+    /// Current execution status
+    pub status: String, // 'pending' | 'in_progress' | 'completed' | 'failed'
+    /// Error message if failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Output/result from execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+}
+
+/// Event emitted when a delegated task starts execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationTaskStartedEvent {
+    pub session_id: String,
+    pub worktree_id: String,
+    pub task_id: String,
+    pub task_index: usize,
+    pub total_tasks: usize,
+    pub provider: String,
+    pub model: String,
+}
+
+/// Event emitted when a delegated task completes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationTaskCompletedEvent {
+    pub session_id: String,
+    pub worktree_id: String,
+    pub task_id: String,
+    pub task_index: usize,
+    pub total_tasks: usize,
+    pub output: Option<String>,
+}
+
+/// Event emitted when a delegated task fails
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationTaskFailedEvent {
+    pub session_id: String,
+    pub worktree_id: String,
+    pub task_id: String,
+    pub task_index: usize,
+    pub total_tasks: usize,
+    pub error: String,
+}
+
+/// Event emitted when all delegated tasks complete
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationCompletedEvent {
+    pub session_id: String,
+    pub worktree_id: String,
+    pub total_tasks: usize,
+    pub completed_tasks: usize,
+    pub failed_tasks: usize,
+}
+
+// ============================================================================
+// Claude Orchestrator Types (Intelligent Multi-Model Delegation)
+// ============================================================================
+
+/// A task prepared with intelligent orchestration data from Claude
+/// Contains rich context for optimal handoff to any AI provider
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestrationTask {
+    /// Task ID (e.g., "task-0", "task-1")
+    pub id: String,
+    /// Original task description from the plan
+    pub original_description: String,
+    /// Claude-generated detailed instructions (3-5 paragraphs)
+    pub instructions: String,
+    /// File paths that should be read/modified for this task
+    pub relevant_files: Vec<String>,
+    /// Key context snippets from the conversation
+    pub context_notes: Vec<String>,
+    /// IDs of tasks that must complete before this one
+    pub depends_on: Vec<String>,
+    /// Whether this task can run in parallel with others
+    pub can_parallelize: bool,
+    /// Suggested execution order (1 = first)
+    pub suggested_order: u32,
+    /// Recommended provider based on task characteristics
+    pub recommended_provider: String,
+    /// Recommended model within the provider
+    pub recommended_model: String,
+    /// Reason for the provider/model recommendation
+    pub recommendation_reason: String,
+}
+
+/// A manifest containing all orchestration data for a plan
+/// Generated by Claude before delegation begins
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegationManifest {
+    /// Session ID this manifest belongs to
+    pub session_id: String,
+    /// Worktree ID
+    pub worktree_id: String,
+    /// Original plan content (for reference)
+    pub original_plan: String,
+    /// Overall context summary for all task executors
+    pub overall_context: String,
+    /// Technical notes about the project (tech stack, patterns)
+    pub project_notes: String,
+    /// Prepared tasks with full orchestration data
+    pub tasks: Vec<OrchestrationTask>,
+    /// Timestamp when manifest was generated
+    pub created_at: u64,
+}
+
+/// User's override for a task assignment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAssignment {
+    /// Task ID to assign
+    pub task_id: String,
+    /// Provider to use (claude, gemini, codex)
+    pub provider: String,
+    /// Model within the provider
+    pub model: String,
+}
+
+// ============================================================================
 // Session Types (for multiple tabs per worktree)
 // ============================================================================
 
@@ -269,6 +440,9 @@ pub struct Session {
     /// Claude CLI session ID for resuming conversations
     #[serde(default)]
     pub claude_session_id: Option<String>,
+    /// Shared task list ID for this session (stored in ~/.claude/tasks/<task_list_id>/)
+    #[serde(default)]
+    pub task_list_id: Option<String>,
     /// Selected AI provider for this session (claude, gemini, codex)
     #[serde(default)]
     pub selected_provider: Option<String>,
@@ -329,6 +503,7 @@ impl Session {
             messages: vec![],
             message_count: None,
             claude_session_id: None,
+            task_list_id: None,
             selected_provider: None,
             selected_model: None,
             selected_thinking_level: None,
@@ -462,6 +637,7 @@ impl SessionMetadata {
             messages: vec![], // Loaded separately from JSONL files
             message_count: Some(self.to_index_entry().message_count),
             claude_session_id: self.claude_session_id.clone(),
+            task_list_id: None, // Not stored in SessionMetadata
             selected_provider: self.selected_provider.clone(),
             selected_model: self.selected_model.clone(),
             selected_thinking_level: self.selected_thinking_level.clone(),

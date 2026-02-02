@@ -77,7 +77,7 @@ export function useUIStatePersistence() {
     } = useChatStore.getState()
     const { expandedProjectIds, expandedFolderIds, selectedProjectId } =
       useProjectsStore.getState()
-    const { leftSidebarSize, leftSidebarVisible } = useUIStore.getState()
+    const { leftSidebarSize, leftSidebarVisible, rightSidebarSize, rightSidebarVisible, activeRightPanelTab } = useUIStore.getState()
 
     return {
       active_worktree_id: activeWorktreeId,
@@ -87,6 +87,9 @@ export function useUIStatePersistence() {
       expanded_folder_ids: Array.from(expandedFolderIds),
       left_sidebar_size: leftSidebarSize,
       left_sidebar_visible: leftSidebarVisible,
+      right_sidebar_size: rightSidebarSize,
+      right_sidebar_visible: rightSidebarVisible,
+      active_right_panel_tab: activeRightPanelTab,
       active_session_ids: activeSessionIds,
       // Worktree-scoped state (kept in ui-state.json)
       review_results: reviewResults,
@@ -169,6 +172,30 @@ export function useUIStatePersistence() {
         visible: uiState.left_sidebar_visible,
       })
       useUIStore.getState().setLeftSidebarVisible(uiState.left_sidebar_visible)
+    }
+
+    // Restore right sidebar size (must be at least 200px to be valid)
+    if (uiState.right_sidebar_size != null && uiState.right_sidebar_size >= 200) {
+      logger.debug('Restoring right sidebar size', {
+        size: uiState.right_sidebar_size,
+      })
+      useUIStore.getState().setRightSidebarSize(uiState.right_sidebar_size)
+    }
+
+    // Restore right sidebar visibility
+    if (uiState.right_sidebar_visible !== undefined) {
+      logger.debug('Restoring right sidebar visibility', {
+        visible: uiState.right_sidebar_visible,
+      })
+      useUIStore.getState().setRightSidebarVisible(uiState.right_sidebar_visible)
+    }
+
+    // Restore active right panel tab
+    if (uiState.active_right_panel_tab) {
+      logger.debug('Restoring active right panel tab', {
+        tab: uiState.active_right_panel_tab,
+      })
+      useUIStore.getState().setActiveRightPanelTab(uiState.active_right_panel_tab as 'files' | 'changes' | 'checks')
     }
 
     // Restore active project first (selectProject clears selectedWorktreeId)
@@ -287,6 +314,9 @@ export function useUIStatePersistence() {
     let prevSelectedProjectId = useProjectsStore.getState().selectedProjectId
     let prevLeftSidebarSize = useUIStore.getState().leftSidebarSize
     let prevLeftSidebarVisible = useUIStore.getState().leftSidebarVisible
+    let prevRightSidebarSize = useUIStore.getState().rightSidebarSize
+    let prevRightSidebarVisible = useUIStore.getState().rightSidebarVisible
+    let prevActiveRightPanelTab = useUIStore.getState().activeRightPanelTab
     let prevWorktreeId = useChatStore.getState().activeWorktreeId
     let prevWorktreePath = useChatStore.getState().activeWorktreePath
     let prevActiveSessionIds = useChatStore.getState().activeSessionIds
@@ -315,13 +345,20 @@ export function useUIStatePersistence() {
 
     // Subscribe to ui-store changes (sidebar size and visibility)
     const unsubUI = useUIStore.subscribe(state => {
-      const sizeChanged = state.leftSidebarSize !== prevLeftSidebarSize
-      const visibilityChanged =
+      const leftSizeChanged = state.leftSidebarSize !== prevLeftSidebarSize
+      const leftVisibilityChanged =
         state.leftSidebarVisible !== prevLeftSidebarVisible
+      const rightSizeChanged = state.rightSidebarSize !== prevRightSidebarSize
+      const rightVisibilityChanged =
+        state.rightSidebarVisible !== prevRightSidebarVisible
+      const rightTabChanged = state.activeRightPanelTab !== prevActiveRightPanelTab
 
-      if (sizeChanged || visibilityChanged) {
+      if (leftSizeChanged || leftVisibilityChanged || rightSizeChanged || rightVisibilityChanged || rightTabChanged) {
         prevLeftSidebarSize = state.leftSidebarSize
         prevLeftSidebarVisible = state.leftSidebarVisible
+        prevRightSidebarSize = state.rightSidebarSize
+        prevRightSidebarVisible = state.rightSidebarVisible
+        prevActiveRightPanelTab = state.activeRightPanelTab
         const currentState = getCurrentUIState()
         debouncedSaveRef.current?.(currentState)
       }

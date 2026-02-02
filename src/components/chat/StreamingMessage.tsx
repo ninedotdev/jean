@@ -248,22 +248,27 @@ export const StreamingMessage = memo(function StreamingMessage({
         onFileClick={onEditedFileClick}
       />
 
-      {/* Show status indicator - waiting when question pending, planning/vibing otherwise */}
-      <div className="text-sm text-muted-foreground/60 mt-4">
-        <span className="animate-shimmer">
-          {toolCalls.some(
-            tc =>
-              (isAskUserQuestion(tc) || isExitPlanMode(tc)) &&
-              !isQuestionAnswered(sessionId, tc.id)
-          )
-            ? 'Waiting for your input'
-            : streamingExecutionMode === 'plan'
-              ? 'Planning...'
-              : streamingExecutionMode === 'yolo'
-                ? 'Yoloing...'
-                : 'Vibing...'}
-        </span>
-      </div>
+      {/* Show status indicator - waiting when question pending, otherwise subtle working indicator */}
+      {toolCalls.some(
+        tc =>
+          (isAskUserQuestion(tc) || isExitPlanMode(tc)) &&
+          !isQuestionAnswered(sessionId, tc.id)
+      ) ? (
+        <div className="text-sm text-muted-foreground/50 mt-3">
+          Waiting for your input
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 mt-3 mb-8">
+          <span className="text-base font-medium animate-shimmer">
+            {streamingExecutionMode === 'plan' ? 'Planning' : 'Working'}
+          </span>
+          <span className="flex gap-0.5">
+            <span className="h-1.5 w-1.5 rounded-full animate-shimmer-dot [animation-delay:-0.3s]" />
+            <span className="h-1.5 w-1.5 rounded-full animate-shimmer-dot [animation-delay:-0.15s]" />
+            <span className="h-1.5 w-1.5 rounded-full animate-shimmer-dot" />
+          </span>
+        </div>
+      )}
     </div>
   )
 })

@@ -8,7 +8,8 @@ use std::path::Path;
 use std::process::Stdio;
 use tauri::Emitter;
 
-use super::claude::{ChunkEvent, ClaudeResponse, ErrorEvent};
+use super::claude::{ChunkEvent, ClaudeResponse, ErrorEvent, ToolBlockEvent, ToolUseEvent};
+use super::types::{ContentBlock, ToolCall};
 
 /// Execute Gemini CLI with streaming output
 /// Returns (process_id, response with content)
@@ -70,8 +71,26 @@ pub fn execute_gemini_detached(
         args.push(m.to_string());
     }
 
-    // YOLO mode for non-interactive execution (auto-approve all actions)
-    args.push("--yolo".to_string());
+    // Execution mode handling:
+    // - plan: --sandbox (read-only, no file modifications)
+    // - build: --approval-mode auto_edit (auto-approve edit tools)
+    // - yolo: --yolo (auto-approve all actions)
+    match execution_mode {
+        Some("plan") => {
+            // Sandbox mode - read-only, no file modifications
+            args.push("--sandbox".to_string());
+            args.push("--yolo".to_string()); // Still need yolo for non-interactive
+        }
+        Some("build") => {
+            // Auto-approve edits but confirm destructive actions
+            args.push("--approval-mode".to_string());
+            args.push("auto_edit".to_string());
+        }
+        _ => {
+            // yolo mode - auto-approve everything
+            args.push("--yolo".to_string());
+        }
+    }
 
     // Use stream-json output format for real-time streaming
     args.push("-o".to_string());
@@ -109,7 +128,8 @@ pub fn execute_gemini_detached(
 
     // Accumulate content from streaming response
     let mut full_content = String::new();
-    let tool_calls = Vec::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut content_blocks: Vec<ContentBlock> = Vec::new();
 
     // Process each line as it comes (JSONL format)
     for line_result in reader.lines() {
@@ -216,6 +236,11 @@ pub fn execute_gemini_detached(
                 if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
                     full_content.push_str(content);
 
+                    // Track content block for persistence
+                    content_blocks.push(ContentBlock::Text {
+                        text: content.to_string(),
+                    });
+
                     // Emit chunk event for real-time streaming
                     let _ = app.emit(
                         "chat:chunk",
@@ -238,6 +263,11 @@ pub fn execute_gemini_detached(
                                 "text" => {
                                     if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
                                         full_content.push_str(text);
+
+                                        // Track content block for persistence
+                                        content_blocks.push(ContentBlock::Text {
+                                            text: text.to_string(),
+                                        });
 
                                         let _ = app.emit(
                                             "chat:chunk",
@@ -270,16 +300,41 @@ pub fn execute_gemini_detached(
 
                                     log::trace!("Gemini tool use: {name} with id {id}");
 
+                                    // Store tool call locally (like Claude does)
+                                    tool_calls.push(ToolCall {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input: input.clone(),
+                                        output: None,
+                                        parent_tool_use_id: None, // Gemini doesn't support nested tools
+                                    });
+
+                                    // Track content block for persistence
+                                    content_blocks.push(ContentBlock::ToolUse {
+                                        tool_call_id: id.clone(),
+                                    });
+
                                     // Emit tool_use event for frontend
                                     let _ = app.emit(
                                         "chat:tool_use",
-                                        serde_json::json!({
-                                            "session_id": session_id,
-                                            "worktree_id": worktree_id,
-                                            "id": id,
-                                            "name": name,
-                                            "input": input,
-                                        }),
+                                        ToolUseEvent {
+                                            session_id: session_id.to_string(),
+                                            worktree_id: worktree_id.to_string(),
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                            input: input.clone(),
+                                            parent_tool_use_id: None,
+                                        },
+                                    );
+
+                                    // Emit tool_block event for frontend (like Claude does)
+                                    let _ = app.emit(
+                                        "chat:tool_block",
+                                        ToolBlockEvent {
+                                            session_id: session_id.to_string(),
+                                            worktree_id: worktree_id.to_string(),
+                                            tool_call_id: id,
+                                        },
                                     );
                                 }
                                 _ => {
@@ -389,20 +444,44 @@ pub fn execute_gemini_detached(
 
     let response_text = full_content.trim().to_string();
 
-    // Note: Gemini doesn't support plan mode - UI should force build/yolo mode
-    // The execution_mode parameter is kept for API consistency but ignored
-    let _ = execution_mode; // Suppress unused warning
+    // Note: Gemini now supports execution modes via --sandbox and --approval-mode
+
+    // Build message.content from content_blocks (includes both text and tool_use blocks)
+    let message_content: Vec<serde_json::Value> = content_blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(serde_json::json!({
+                "type": "text",
+                "text": text
+            })),
+            ContentBlock::ToolUse { tool_call_id } => {
+                // Find the tool call by ID to include full details
+                tool_calls.iter().find(|tc| tc.id == *tool_call_id).map(|tc| {
+                    serde_json::json!({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": tc.input
+                    })
+                })
+            }
+            ContentBlock::Thinking { .. } => None, // Gemini doesn't support thinking blocks
+        })
+        .collect();
 
     // Write JSONL format to output file (so parse_run_to_message can read it)
     let assistant_json = serde_json::json!({
         "type": "assistant",
         "message": {
-            "content": [
-                {
+            "content": if message_content.is_empty() {
+                // Fallback to just text if no content blocks were tracked
+                vec![serde_json::json!({
                     "type": "text",
                     "text": response_text
-                }
-            ]
+                })]
+            } else {
+                message_content
+            }
         }
     });
     let result_json = serde_json::json!({
@@ -411,6 +490,7 @@ pub fn execute_gemini_detached(
     });
 
     if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
         .append(true)
         .open(output_file)
     {
@@ -428,14 +508,14 @@ pub fn execute_gemini_detached(
         }),
     );
 
-    // Return response with actual content
+    // Return response with actual content (tool_calls and content_blocks now populated)
     Ok((
         pid,
         ClaudeResponse {
             content: response_text,
             session_id: session_id.to_string(),
             tool_calls,
-            content_blocks: Vec::new(),
+            content_blocks,
             cancelled: false,
             usage: None,
         },

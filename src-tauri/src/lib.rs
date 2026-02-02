@@ -12,6 +12,9 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuild
 mod background_tasks;
 mod chat;
 mod claude_cli;
+mod claude_usage;
+mod provider_usage;
+mod usage;
 mod gh_cli;
 mod glab_cli;
 mod platform;
@@ -138,10 +141,16 @@ pub struct AppPreferences {
     pub workspace_folder: String, // Base folder for worktrees (empty = default ~/jean/)
     #[serde(default = "default_ai_provider")]
     pub default_ai_provider: String, // Default AI CLI provider: claude, gemini, codex
+    #[serde(default = "default_show_usage_status_bar")]
+    pub show_usage_status_bar: bool, // Show Claude usage status bar (cost, context, limits)
 }
 
 fn default_auto_branch_naming() -> bool {
     true // Enabled by default
+}
+
+fn default_show_usage_status_bar() -> bool {
+    true // Show usage status bar by default
 }
 
 fn default_branch_naming_model() -> String {
@@ -199,7 +208,8 @@ fn default_remote_poll_interval() -> u64 {
 fn default_keybindings() -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     map.insert("focus_chat_input".to_string(), "mod+l".to_string());
-    map.insert("toggle_left_sidebar".to_string(), "mod+1".to_string());
+    map.insert("toggle_left_sidebar".to_string(), "mod+b".to_string());
+    map.insert("toggle_right_sidebar".to_string(), "mod+shift+b".to_string());
     map.insert("open_preferences".to_string(), "mod+comma".to_string());
     map.insert("open_commit_modal".to_string(), "mod+shift+c".to_string());
     map.insert("open_pull_request".to_string(), "mod+shift+p".to_string());
@@ -531,6 +541,7 @@ impl Default for AppPreferences {
             review_sound: default_review_sound(),
             workspace_folder: String::new(),
             default_ai_provider: default_ai_provider(),
+            show_usage_status_bar: default_show_usage_status_bar(),
         }
     }
 }
@@ -571,6 +582,18 @@ pub struct UIState {
     #[serde(default)]
     pub left_sidebar_visible: Option<bool>,
 
+    /// Right sidebar width in pixels, defaults to 280
+    #[serde(default)]
+    pub right_sidebar_size: Option<f64>,
+
+    /// Right sidebar visibility, defaults to false
+    #[serde(default)]
+    pub right_sidebar_visible: Option<bool>,
+
+    /// Active right panel tab: 'files' | 'changes' | 'checks', defaults to 'files'
+    #[serde(default)]
+    pub active_right_panel_tab: Option<String>,
+
     /// Active session ID per worktree (for restoring open tabs)
     #[serde(default)]
     pub active_session_ids: std::collections::HashMap<String, String>,
@@ -610,6 +633,9 @@ impl Default for UIState {
             expanded_folder_ids: Vec::new(),
             left_sidebar_size: None,
             left_sidebar_visible: None,
+            right_sidebar_size: None,
+            right_sidebar_visible: None,
+            active_right_panel_tab: None,
             active_session_ids: std::collections::HashMap::new(),
             review_results: std::collections::HashMap::new(),
             viewing_review_tab: std::collections::HashMap::new(),
@@ -1270,6 +1296,7 @@ pub fn run() {
             // Project management commands
             projects::list_projects,
             projects::add_project,
+            projects::clone_repository,
             projects::init_git_in_folder,
             projects::init_project,
             projects::remove_project,
@@ -1412,9 +1439,16 @@ pub fn run() {
             chat::generate_session_digest,
             // Chat commands - Debug info
             chat::get_session_debug_info,
+            // Usage commands
+            usage::get_usage_overview,
             // Chat commands - Session resume (detached process recovery)
             chat::resume_session,
             chat::check_resumable_sessions,
+            // Chat commands - Multi-model delegation
+            chat::execute_delegated_tasks,
+            // Chat commands - Claude Orchestrator (intelligent delegation)
+            chat::generate_delegation_manifest,
+            chat::execute_orchestrated_tasks,
             // Claude CLI management commands
             claude_cli::check_claude_cli_installed,
             claude_cli::check_claude_cli_auth,
@@ -1425,11 +1459,13 @@ pub fn run() {
             gh_cli::check_gh_cli_auth,
             gh_cli::get_available_gh_versions,
             gh_cli::install_gh_cli,
+            gh_cli::list_github_repos,
             // GitLab CLI management commands
             glab_cli::check_glab_cli_installed,
             glab_cli::check_glab_cli_auth,
             glab_cli::get_available_glab_versions,
             glab_cli::install_glab_cli,
+            glab_cli::list_gitlab_repos,
             // Gemini CLI management commands
             ai_cli::gemini::commands::check_gemini_cli_installed,
             ai_cli::gemini::commands::check_gemini_cli_auth,
@@ -1438,6 +1474,12 @@ pub fn run() {
             ai_cli::codex::commands::check_codex_cli_installed,
             ai_cli::codex::commands::check_codex_cli_auth,
             ai_cli::codex::commands::install_codex_cli,
+            ai_cli::codex::commands::uninstall_codex_cli,
+            ai_cli::codex::commands::get_available_codex_versions,
+            // Kimi CLI management commands
+            ai_cli::kimi::commands::check_kimi_cli_installed,
+            ai_cli::kimi::commands::check_kimi_cli_auth,
+            ai_cli::kimi::commands::install_kimi_cli,
             // GitLab issues/MRs commands
             projects::list_gitlab_issues,
             projects::get_gitlab_issue,
@@ -1462,6 +1504,17 @@ pub fn run() {
             background_tasks::commands::set_remote_poll_interval,
             background_tasks::commands::get_remote_poll_interval,
             background_tasks::commands::trigger_immediate_remote_poll,
+            // Claude usage commands
+            claude_usage::commands::get_claude_usage_limits,
+            claude_usage::commands::get_session_usage,
+            claude_usage::commands::has_claude_credentials,
+            claude_usage::commands::get_hook_context_data,
+            claude_usage::commands::is_context_hook_installed,
+            claude_usage::commands::install_context_hook,
+            claude_usage::commands::uninstall_context_hook,
+            // Multi-provider usage commands
+            provider_usage::commands::get_provider_usage,
+            provider_usage::commands::get_all_providers_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

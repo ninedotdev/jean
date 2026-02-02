@@ -8,6 +8,9 @@ import type {
   ArchivedSessionEntry,
   ChatMessage,
   ChatHistory,
+  DelegatedTask,
+  DelegationManifest,
+  TaskAssignment,
   Session,
   WorktreeSessions,
   Question,
@@ -1377,6 +1380,27 @@ export function useSetSessionModel() {
       })
       logger.info('Session model/provider saved')
     },
+    onMutate: async ({ sessionId, model, provider }) => {
+      // Cancel outgoing refetches to prevent race conditions
+      await queryClient.cancelQueries({
+        queryKey: chatQueryKeys.session(sessionId),
+      })
+
+      // Snapshot previous value for rollback on error
+      const previousSession = queryClient.getQueryData(chatQueryKeys.session(sessionId))
+
+      // Optimistically update session data for instant UI feedback
+      queryClient.setQueryData(chatQueryKeys.session(sessionId), (old: Session | undefined) => {
+        if (!old) return old
+        return {
+          ...old,
+          ...(provider !== undefined && { selected_provider: provider }),
+          ...(model !== undefined && { selected_model: model }),
+        }
+      })
+
+      return { previousSession }
+    },
     onSuccess: (_, { sessionId, worktreeId }) => {
       queryClient.invalidateQueries({
         queryKey: chatQueryKeys.session(sessionId),
@@ -1385,7 +1409,12 @@ export function useSetSessionModel() {
         queryKey: chatQueryKeys.sessions(worktreeId),
       })
     },
-    onError: error => {
+    onError: (error, { sessionId }, context) => {
+      // Rollback to previous value on error
+      if (context?.previousSession) {
+        queryClient.setQueryData(chatQueryKeys.session(sessionId), context.previousSession)
+      }
+
       const message =
         error instanceof Error ? error.message : 'Unknown error occurred'
       logger.error('Failed to save model/provider selection', { error })
@@ -1698,6 +1727,148 @@ export async function markPlanApproved(
     logger.info('Plan marked as approved', { messageId })
   } catch (error) {
     logger.error('Failed to mark plan approved', { error, messageId })
+    throw error
+  }
+}
+
+// ============================================================================
+// Multi-Model Delegation
+// ============================================================================
+
+/**
+ * Execute a plan with multi-model delegation
+ * Each task is executed sequentially with its assigned provider/model
+ */
+export async function executeDelegatedTasks(
+  sessionId: string,
+  worktreeId: string,
+  worktreePath: string,
+  tasks: DelegatedTask[],
+  executionMode?: string,
+  thinkingLevel?: ThinkingLevel
+): Promise<DelegatedTask[]> {
+  if (!isTauri()) {
+    throw new Error('Delegation is only available in Tauri')
+  }
+
+  logger.info('Executing delegated tasks', {
+    sessionId,
+    taskCount: tasks.length,
+  })
+
+  try {
+    const results = await invoke<DelegatedTask[]>('execute_delegated_tasks', {
+      sessionId,
+      worktreeId,
+      worktreePath,
+      tasks,
+      executionMode,
+      thinkingLevel,
+    })
+
+    logger.info('Delegated tasks completed', {
+      sessionId,
+      completedCount: results.filter(t => t.status === 'completed').length,
+      failedCount: results.filter(t => t.status === 'failed').length,
+    })
+
+    return results
+  } catch (error) {
+    logger.error('Failed to execute delegated tasks', { error, sessionId })
+    throw error
+  }
+}
+
+// ============================================================================
+// Claude Orchestrator (Intelligent Multi-Model Delegation)
+// ============================================================================
+
+/**
+ * Generate an orchestration manifest from a plan
+ * Claude analyzes the conversation and prepares detailed instructions for each task
+ */
+export async function generateDelegationManifest(
+  sessionId: string,
+  worktreeId: string,
+  worktreePath: string,
+  planContent: string,
+  messages: ChatMessage[]
+): Promise<DelegationManifest> {
+  if (!isTauri()) {
+    throw new Error('Orchestration is only available in Tauri')
+  }
+
+  logger.info('Generating delegation manifest', {
+    sessionId,
+    messageCount: messages.length,
+  })
+
+  try {
+    const manifest = await invoke<DelegationManifest>(
+      'generate_delegation_manifest',
+      {
+        sessionId,
+        worktreeId,
+        worktreePath,
+        planContent,
+        messages,
+      }
+    )
+
+    logger.info('Delegation manifest generated', {
+      sessionId,
+      taskCount: manifest.tasks.length,
+    })
+
+    return manifest
+  } catch (error) {
+    logger.error('Failed to generate delegation manifest', { error, sessionId })
+    throw error
+  }
+}
+
+/**
+ * Execute a plan with intelligent orchestration
+ * Each task is executed with rich context from the manifest
+ */
+export async function executeOrchestratedTasks(
+  sessionId: string,
+  worktreeId: string,
+  worktreePath: string,
+  manifest: DelegationManifest,
+  taskAssignments: TaskAssignment[],
+  executionMode?: string,
+  thinkingLevel?: ThinkingLevel
+): Promise<DelegatedTask[]> {
+  if (!isTauri()) {
+    throw new Error('Orchestration is only available in Tauri')
+  }
+
+  logger.info('Executing orchestrated tasks', {
+    sessionId,
+    taskCount: manifest.tasks.length,
+  })
+
+  try {
+    const results = await invoke<DelegatedTask[]>('execute_orchestrated_tasks', {
+      sessionId,
+      worktreeId,
+      worktreePath,
+      manifest,
+      taskAssignments,
+      executionMode,
+      thinkingLevel,
+    })
+
+    logger.info('Orchestrated tasks completed', {
+      sessionId,
+      completedCount: results.filter(t => t.status === 'completed').length,
+      failedCount: results.filter(t => t.status === 'failed').length,
+    })
+
+    return results
+  } catch (error) {
+    logger.error('Failed to execute orchestrated tasks', { error, sessionId })
     throw error
   }
 }

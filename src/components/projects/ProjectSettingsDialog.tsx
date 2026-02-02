@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Loader2, GitBranch, Check, ChevronsUpDown, ImageIcon, X } from 'lucide-react'
+import { GitBranch, Check, ChevronsUpDown, ImageIcon, X } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import {
   Dialog,
@@ -151,7 +152,7 @@ export function ProjectSettingsDialog() {
                   disabled={setProjectAvatar.isPending}
                 >
                   {setProjectAvatar.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Spinner size={16} />
                   ) : (
                     <ImageIcon className="h-4 w-4" />
                   )}
@@ -165,7 +166,7 @@ export function ProjectSettingsDialog() {
                     disabled={removeProjectAvatar.isPending}
                   >
                     {removeProjectAvatar.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner size={16} />
                     ) : (
                       <X className="h-4 w-4" />
                     )}
@@ -190,7 +191,7 @@ export function ProjectSettingsDialog() {
 
             {branchesLoading ? (
               <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Spinner size={16} />
                 Fetching branches...
               </div>
             ) : branchesError ? (
@@ -267,7 +268,7 @@ export function ProjectSettingsDialog() {
             onClick={handleSave}
             disabled={!hasChanges || isPending || branchesLoading}
           >
-            {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            {isPending && <Spinner size={16} />}
             Save
           </Button>
         </DialogFooter>

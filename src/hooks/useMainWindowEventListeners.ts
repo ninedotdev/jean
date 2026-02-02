@@ -189,6 +189,16 @@ function executeKeybindingAction(
       setLeftSidebarVisible(!leftSidebarVisible)
       break
     }
+    case 'toggle_right_sidebar': {
+      logger.debug('Keybinding: toggle_right_sidebar')
+      const { selectedWorktreeId } = useProjectsStore.getState()
+      if (selectedWorktreeId) {
+        const { rightSidebarVisible, setRightSidebarVisible } =
+          useUIStore.getState()
+        setRightSidebarVisible(!rightSidebarVisible)
+      }
+      break
+    }
     case 'open_preferences':
       logger.debug('Keybinding: open_preferences')
       commandContext.openPreferences()

@@ -1,4 +1,6 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
+import { toast } from 'sonner'
+import { Check, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { normalizePath } from '@/lib/path-utils'
 import { Markdown } from '@/components/ui/markdown'
@@ -127,6 +129,52 @@ function extractSkillPaths(content: string): string[] {
 /** Remove skill attachment markers from content for cleaner display */
 function stripSkillMarkers(content: string): string {
   return content.replace(SKILL_ATTACHMENT_REGEX, '').trim()
+}
+
+/** Assistant message wrapper with copy action */
+function AssistantMessageWithActions({
+  messageBoxContent,
+  message,
+}: {
+  messageBoxContent: React.ReactNode
+  message: ChatMessage
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [message.content])
+
+  return (
+    <div
+      className={cn(
+        'text-muted-foreground w-full min-w-0 break-words group',
+        message.cancelled && 'opacity-60'
+      )}
+    >
+      {messageBoxContent}
+      {/* Action buttons - visible on hover */}
+      <div className="flex items-center gap-2 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-xs text-muted-foreground/70 hover:text-foreground transition-colors"
+          title="Copy message"
+        >
+          {copied ? (
+            <Check className="h-3 w-3" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+    </div>
+  )
 }
 
 interface MessageItemProps {
@@ -576,7 +624,7 @@ export const MessageItem = memo(function MessageItem({
           <TooltipTrigger asChild>
             <div
               className={cn(
-                'text-foreground border border-border rounded-lg px-3 py-2 max-w-[70%] bg-muted/20 min-w-0 break-words',
+                'text-foreground rounded-lg px-2.5 py-1.5 max-w-[70%] bg-muted/30 min-w-0 break-words',
                 message.cancelled && 'opacity-60'
               )}
             >
@@ -586,14 +634,10 @@ export const MessageItem = memo(function MessageItem({
           {userMessageTooltip}
         </Tooltip>
       ) : (
-        <div
-          className={cn(
-            'text-muted-foreground w-full min-w-0 break-words',
-            message.cancelled && 'opacity-60'
-          )}
-        >
-          {messageBoxContent}
-        </div>
+        <AssistantMessageWithActions
+          messageBoxContent={messageBoxContent}
+          message={message}
+        />
       )}
     </div>
   )

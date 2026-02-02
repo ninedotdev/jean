@@ -84,6 +84,8 @@ const createMockContext = (): CommandContext => ({
   addProject: vi.fn(),
   initProject: vi.fn(),
   removeProject: vi.fn(),
+  cloneFromGitHub: vi.fn(),
+  cloneFromGitLab: vi.fn(),
 
   // AI
   runAIReview: vi.fn().mockResolvedValue(undefined),

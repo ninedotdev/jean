@@ -56,6 +56,7 @@ pub struct GlabAuthStatus {
 
 /// GitLab API release response structure
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GitLabRelease {
     tag_name: String,
     released_at: String,
@@ -66,6 +67,7 @@ struct GitLabRelease {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 struct GitLabAssets {
     #[serde(default)]
     links: Vec<GitLabAssetLink>,
@@ -95,9 +97,8 @@ pub async fn check_glab_cli_installed(app: AppHandle) -> Result<GlabCliStatus, S
     }
 
     // Try to get the version by running glab --version
-    // Use shell wrapper to bypass macOS security restrictions
-    let shell_cmd = format!("{:?} --version", binary_path);
-    let version = match crate::platform::shell_command(&shell_cmd).output() {
+    // Use cli_command to handle .cmd files on Windows
+    let version = match crate::platform::cli_command(&binary_path, &["--version"]).output() {
         Ok(output) => {
             if output.status.success() {
                 let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -338,9 +339,8 @@ pub async fn install_glab_cli(app: AppHandle, version: Option<String>) -> Result
     }
 
     // Verify the binary works
-    let shell_cmd = format!("{:?} --version", binary_path);
-    log::trace!("Running via shell: {:?}", shell_cmd);
-    let version_output = crate::platform::shell_command(&shell_cmd)
+    log::trace!("Verifying binary: {:?}", binary_path);
+    let version_output = crate::platform::cli_command(&binary_path, &["--version"])
         .output()
         .map_err(|e| format!("Failed to verify GitLab CLI: {e}"))?;
 
@@ -523,11 +523,9 @@ pub async fn check_glab_cli_auth(app: AppHandle) -> Result<GlabAuthStatus, Strin
     }
 
     // Run glab auth status to check authentication
-    let shell_cmd = format!("{:?} auth status", binary_path);
+    log::trace!("Running auth check for: {:?}", binary_path);
 
-    log::trace!("Running auth check: {:?}", shell_cmd);
-
-    let output = crate::platform::shell_command(&shell_cmd)
+    let output = crate::platform::cli_command(&binary_path, &["auth", "status"])
         .output()
         .map_err(|e| format!("Failed to execute GitLab CLI: {e}"))?;
 
@@ -574,4 +572,100 @@ fn emit_progress(app: &AppHandle, stage: &str, message: &str, percent: u8) {
     if let Err(e) = app.emit("glab-cli:install-progress", &progress) {
         log::warn!("Failed to emit install progress: {}", e);
     }
+}
+
+// =============================================================================
+// GitLab Repository Listing Commands
+// =============================================================================
+
+use crate::projects::types::RemoteRepository;
+
+/// GitLab API response for project listing (from glab repo list)
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct GlabRepoListItem {
+    id: u64,
+    name: String,
+    path_with_namespace: String,
+    description: Option<String>,
+    http_url_to_repo: String,
+    ssh_url_to_repo: String,
+    visibility: String,
+    #[serde(default)]
+    forked_from_project: Option<serde_json::Value>,
+    default_branch: Option<String>,
+    last_activity_at: String,
+    star_count: u32,
+}
+
+/// List projects for the authenticated GitLab user or a specific group
+#[tauri::command]
+pub async fn list_gitlab_repos(
+    app: AppHandle,
+    group: Option<String>,
+) -> Result<Vec<RemoteRepository>, String> {
+    log::trace!("Listing GitLab repositories for group: {:?}", group);
+
+    let binary_path = get_glab_cli_binary_path(&app)?;
+
+    if !binary_path.exists() {
+        return Err("GitLab CLI not installed".to_string());
+    }
+
+    // Build command args
+    let mut args: Vec<&str> = vec!["repo", "list"];
+
+    // Add group if specified
+    let group_owned: String;
+    if let Some(ref g) = group {
+        group_owned = g.clone();
+        args.extend(["--group", &group_owned]);
+    }
+
+    args.extend(["-F", "json"]);
+
+    log::trace!("Running glab with args: {:?}", args);
+
+    let output = crate::platform::cli_command(&binary_path, &args)
+        .output()
+        .map_err(|e| format!("Failed to execute glab command: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        log::warn!("glab repo list failed: {}", stderr);
+
+        if stderr.contains("glab auth login") || stderr.contains("authentication") {
+            return Err("GitLab CLI not authenticated. Run 'glab auth login' first.".to_string());
+        }
+
+        return Err(format!("Failed to list repositories: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let repos: Vec<GlabRepoListItem> = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse glab output: {e}"))?;
+
+    // Convert to RemoteRepository
+    let remote_repos: Vec<RemoteRepository> = repos
+        .into_iter()
+        .map(|r| {
+            RemoteRepository {
+                name: r.name,
+                full_name: r.path_with_namespace,
+                description: r.description,
+                clone_url: r.http_url_to_repo,
+                ssh_url: r.ssh_url_to_repo,
+                is_private: r.visibility == "private" || r.visibility == "internal",
+                is_fork: r.forked_from_project.is_some(),
+                default_branch: r.default_branch.unwrap_or_else(|| "main".to_string()),
+                updated_at: r.last_activity_at,
+                language: None, // GitLab doesn't return language in list
+                stars_count: r.star_count,
+                provider: "gitlab".to_string(),
+            }
+        })
+        .collect();
+
+    log::trace!("Found {} GitLab repositories", remote_repos.len());
+    Ok(remote_repos)
 }

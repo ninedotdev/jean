@@ -23,6 +23,10 @@ export const aiCliQueryKeys = {
     status: ['ai-cli', 'codex', 'status'] as const,
     auth: ['ai-cli', 'codex', 'auth'] as const,
   },
+  kimi: {
+    status: ['ai-cli', 'kimi', 'status'] as const,
+    auth: ['ai-cli', 'kimi', 'auth'] as const,
+  },
 }
 
 // =============================================================================
@@ -105,6 +109,48 @@ export function useInstallCodexCli() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: aiCliQueryKeys.codex.status })
       queryClient.invalidateQueries({ queryKey: aiCliQueryKeys.codex.auth })
+    },
+  })
+}
+
+// =============================================================================
+// Kimi CLI Hooks
+// =============================================================================
+
+/** Check if Kimi CLI is installed */
+export function useKimiCliStatus() {
+  return useQuery({
+    queryKey: aiCliQueryKeys.kimi.status,
+    queryFn: async (): Promise<AiCliStatus> => {
+      return await invoke<AiCliStatus>('check_kimi_cli_installed')
+    },
+    staleTime: 60 * 1000, // 1 minute
+  })
+}
+
+/** Check if Kimi CLI is authenticated */
+export function useKimiCliAuth(enabled = true) {
+  return useQuery({
+    queryKey: aiCliQueryKeys.kimi.auth,
+    queryFn: async (): Promise<AiCliAuthStatus> => {
+      return await invoke<AiCliAuthStatus>('check_kimi_cli_auth')
+    },
+    enabled,
+    staleTime: 60 * 1000, // 1 minute
+  })
+}
+
+/** Install Kimi CLI */
+export function useInstallKimiCli() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (): Promise<string> => {
+      return await invoke<string>('install_kimi_cli')
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: aiCliQueryKeys.kimi.status })
+      queryClient.invalidateQueries({ queryKey: aiCliQueryKeys.kimi.auth })
     },
   })
 }

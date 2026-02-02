@@ -15,6 +15,7 @@ import type {
   LoadedGitLabIssueContext,
   LoadedGitLabMergeRequestContext,
 } from '@/types/gitlab'
+import type { Worktree } from '@/types/projects'
 import { isTauri } from './projects'
 
 // Query keys for GitLab
@@ -428,8 +429,8 @@ export async function openMergeRequest(
 export async function checkoutGitLabMR(
   projectId: string,
   mrIid: number
-): Promise<import('@/types/projects').Worktree> {
-  return invoke<import('@/types/projects').Worktree>('checkout_gitlab_mr', {
+): Promise<Worktree> {
+  return invoke<Worktree>('checkout_gitlab_mr', {
     projectId,
     mrIid,
   })

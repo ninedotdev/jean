@@ -76,7 +76,7 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --warning: #fcd452;
+  --warning: #f59e0b;
   --success: #22c55e;
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -104,8 +104,8 @@
   --card-foreground: #fafafa;
   --popover: #181818; /* coolgray-100 */
   --popover-foreground: #fafafa;
-  --primary: #fcd452; /* yellow accent */
-  --primary-foreground: #101010; /* dark text on yellow */
+  --primary: #2dd4bf; /* turquoise accent */
+  --primary-foreground: #101010; /* dark text on turquoise */
   --secondary: #202020; /* coolgray-200 */
   --secondary-foreground: #fafafa;
   --muted: #242424; /* coolgray-300 */
@@ -113,24 +113,24 @@
   --accent: #282828; /* coolgray-400 */
   --accent-foreground: #fafafa;
   --destructive: #dc2626; /* error red */
-  --warning: #fcd452; /* yellow */
+  --warning: #f59e0b; /* amber for warnings */
   --success: #22c55e; /* green */
   --border: #323232; /* coolgray-500 */
   --input: #323232; /* coolgray-500 */
-  --ring: #fcd452; /* yellow focus ring */
-  --chart-1: #fcd452;
+  --ring: #2dd4bf; /* turquoise focus ring */
+  --chart-1: #2dd4bf;
   --chart-2: #22c55e;
   --chart-3: #6b16ed;
   --chart-4: #dc2626;
   --chart-5: #3b82f6;
   --sidebar: #161616; /* slightly lighter than background */
   --sidebar-foreground: #fafafa;
-  --sidebar-primary: #fcd452; /* yellow */
+  --sidebar-primary: #2dd4bf; /* turquoise */
   --sidebar-primary-foreground: #101010;
   --sidebar-accent: #282828; /* coolgray-400 */
   --sidebar-accent-foreground: #fafafa;
   --sidebar-border: #323232; /* coolgray-500 */
-  --sidebar-ring: #fcd452;
+  --sidebar-ring: #2dd4bf;
 }
 
 /* Wave animation for vibing indicator */
@@ -155,11 +155,11 @@
 /* Blink animation for waiting indicator */
 @keyframes blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  50% { opacity: 0.5; }
 }
 
 .animate-blink {
-  animation: blink 1s ease-in-out infinite;
+  animation: blink 1.2s ease-in-out infinite;
 }
 
 /* Border spin animation for running indicator */
@@ -217,7 +217,21 @@
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer 1.5s linear infinite;
+  animation: shimmer 3s linear infinite;
+}
+
+/* Shimmer animation for dots - uses background-color instead of background-clip */
+@keyframes shimmer-dot {
+  0%, 100% {
+    background-color: rgba(156, 163, 175, 0.3);
+  }
+  50% {
+    background-color: rgba(255, 255, 255, 0.8);
+  }
+}
+
+.animate-shimmer-dot {
+  animation: shimmer-dot 1.5s ease-in-out infinite;
 }
 
 /* Collapsible animations */
@@ -344,4 +358,12 @@ kbd {
   font-family: var(--font-family-chat) !important;
   font-size: var(--chat-font-size) !important;
   line-height: var(--chat-line-height) !important;
+}
+
+/* Smooth transitions for interactive elements */
+button,
+[role="button"],
+a,
+.interactive {
+  transition: all 150ms ease-out;
 }

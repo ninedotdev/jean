@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { FileText, Loader2, AlertCircle, Columns2, Rows3 } from 'lucide-react'
+import { FileText, AlertCircle, Columns2, Rows3 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { FileDiff } from '@pierre/diffs/react'
 import { parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -231,7 +232,7 @@ export function FileDiffModal({
           {/* Loading state */}
           {isLoading && (
             <div className="flex items-center justify-center h-full text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" />
+              <Spinner size={20} className="mr-2" />
               Loading diff...
             </div>
           )}

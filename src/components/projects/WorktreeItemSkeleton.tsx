@@ -1,5 +1,5 @@
-import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Spinner } from '@/components/ui/spinner'
 import type { Worktree } from '@/types/projects'
 import { useProjectsStore } from '@/store/projects-store'
 
@@ -26,7 +26,7 @@ export function WorktreeItemSkeleton({ worktree }: WorktreeItemSkeletonProps) {
       )}
     >
       {/* Spinner icon */}
-      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+      <Spinner size={14} className="shrink-0" />
 
       {/* Worktree name with reduced opacity */}
       <span className="flex-1 truncate text-sm text-muted-foreground">

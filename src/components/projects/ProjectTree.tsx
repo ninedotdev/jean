@@ -32,10 +32,11 @@ const MAX_NESTING_DEPTH = 3
 
 function getDepth(projects: Project[], itemId: string): number {
   let depth = 0
-  let current = projects.find(p => p.id === itemId)
+  let current: Project | undefined = projects.find(p => p.id === itemId)
   while (current?.parent_id) {
     depth++
-    current = projects.find(p => p.id === current!.parent_id)
+    const parentId = current.parent_id
+    current = projects.find(p => p.id === parentId)
   }
   return depth
 }
@@ -230,7 +231,7 @@ function RootDropZone({ isOver }: { isOver: boolean }) {
 export function ProjectTree({ projects }: ProjectTreeProps) {
   const reorderItems = useReorderItems()
   const moveItem = useMoveItem()
-  const { expandFolder, expandedFolderIds } = useProjectsStore()
+  const expandedFolderIds = useProjectsStore(state => state.expandedFolderIds)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [overFolderId, setOverFolderId] = useState<string | null>(null)
   const [isOverRoot, setIsOverRoot] = useState(false)
@@ -407,6 +408,7 @@ export function ProjectTree({ projects }: ProjectTreeProps) {
           newParentId: over.id as string,
           // No targetIndex = append at end
         })
+        const { expandFolder } = useProjectsStore.getState()
         expandFolder(over.id as string)
         return
       }
@@ -451,7 +453,7 @@ export function ProjectTree({ projects }: ProjectTreeProps) {
         reorderItems.mutate({ itemIds, parentId })
       }
     },
-    [projects, reorderItems, moveItem, expandFolder]
+    [projects, reorderItems, moveItem]
   )
 
   return (

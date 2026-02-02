@@ -83,6 +83,8 @@ export interface CommandContext {
   addProject: () => void
   initProject: () => void
   removeProject: () => void
+  cloneFromGitHub: () => void
+  cloneFromGitLab: () => void
 
   // AI
   runAIReview: () => Promise<void>

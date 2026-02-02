@@ -304,6 +304,307 @@ pub fn spawn_detached_claude(
     Ok(pid)
 }
 
+/// Spawn Codex CLI as a detached process that survives Jean quitting (Unix).
+///
+/// Unlike Claude, Codex takes the prompt as an argument rather than stdin.
+/// Uses `nohup` and shell backgrounding to fully detach the process.
+///
+/// Returns the PID of the detached Codex CLI process.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_detached_codex(
+    cli_path: &Path,
+    args: &[String],
+    output_file: &Path,
+    stderr_file: &Path,
+    working_dir: &Path,
+    env_vars: &[(&str, &str)],
+) -> Result<u32, String> {
+    // Build the shell command:
+    // nohup /path/to/codex [args] >> output.jsonl 2>> stderr.log & echo $!
+    //
+    // - nohup: Makes the process immune to SIGHUP
+    // - >> output.jsonl: Appends stdout to file (Codex writes JSONL here)
+    // - 2>> stderr.log: Appends stderr to separate file
+    // - &: Run in background
+    // - echo $!: Print the PID of the background process
+
+    let cli_path_escaped =
+        shell_escape(cli_path.to_str().ok_or("CLI path contains invalid UTF-8")?);
+    let output_path_escaped = shell_escape(
+        output_file
+            .to_str()
+            .ok_or("Output file path contains invalid UTF-8")?,
+    );
+    let stderr_path_escaped = shell_escape(
+        stderr_file
+            .to_str()
+            .ok_or("Stderr file path contains invalid UTF-8")?,
+    );
+
+    // Build args string with proper escaping
+    let args_str = args
+        .iter()
+        .map(|arg| shell_escape(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Build environment variable exports
+    let env_exports = env_vars
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, shell_escape(v)))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // The full shell command - Codex doesn't need stdin piping
+    let shell_cmd = if env_exports.is_empty() {
+        format!(
+            "nohup {cli_path_escaped} {args_str} >> {output_path_escaped} 2>> {stderr_path_escaped} & echo $!"
+        )
+    } else {
+        format!(
+            "{env_exports} nohup {cli_path_escaped} {args_str} >> {output_path_escaped} 2>> {stderr_path_escaped} & echo $!"
+        )
+    };
+
+    log::trace!("Spawning detached Codex CLI");
+    log::trace!("Shell command: {shell_cmd}");
+    log::trace!("Working directory: {working_dir:?}");
+
+    // Spawn the shell command
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(&shell_cmd)
+        .current_dir(working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+
+    // Read the PID from stdout
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture shell stdout")?;
+    let reader = BufReader::new(stdout);
+
+    let mut pid_str = String::new();
+    for line in reader.lines() {
+        match line {
+            Ok(l) => {
+                pid_str = l.trim().to_string();
+                break;
+            }
+            Err(e) => {
+                log::warn!("Error reading PID from shell: {e}");
+            }
+        }
+    }
+
+    let stderr_handle = child.stderr.take();
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for shell: {e}"))?;
+
+    if !status.success() {
+        let stderr_output = stderr_handle
+            .map(|stderr| {
+                BufReader::new(stderr)
+                    .lines()
+                    .map_while(Result::ok)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        return Err(format!(
+            "Shell command failed with status: {status}\nStderr: {stderr_output}"
+        ));
+    }
+
+    let pid: u32 = pid_str
+        .parse()
+        .map_err(|e| format!("Failed to parse PID '{pid_str}': {e}"))?;
+
+    log::trace!("Detached Codex CLI spawned with PID: {pid}");
+
+    Ok(pid)
+}
+
+/// Spawn Kimi CLI as a detached process (Unix).
+///
+/// Unlike Codex, Kimi doesn't work well with nohup, so we use a simpler
+/// backgrounding approach without nohup.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_detached_kimi(
+    cli_path: &Path,
+    args: &[String],
+    output_file: &Path,
+    stderr_file: &Path,
+    working_dir: &Path,
+    _env_vars: &[(&str, &str)],
+) -> Result<u32, String> {
+    // Build the shell command without nohup:
+    // /path/to/kimi [args] >> output.jsonl 2>> stderr.log & echo $!
+    //
+    // Kimi doesn't work properly with nohup, but since Jean stays running
+    // during the request, we don't need nohup for crash survival.
+
+    let cli_path_escaped =
+        shell_escape(cli_path.to_str().ok_or("CLI path contains invalid UTF-8")?);
+    let output_path_escaped = shell_escape(
+        output_file
+            .to_str()
+            .ok_or("Output file path contains invalid UTF-8")?,
+    );
+    let stderr_path_escaped = shell_escape(
+        stderr_file
+            .to_str()
+            .ok_or("Stderr file path contains invalid UTF-8")?,
+    );
+
+    // Build args string with proper escaping
+    let args_str = args
+        .iter()
+        .map(|arg| shell_escape(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Simple background execution without nohup
+    let shell_cmd = format!(
+        "{cli_path_escaped} {args_str} >> {output_path_escaped} 2>> {stderr_path_escaped} & echo $!"
+    );
+
+    log::trace!("Spawning Kimi CLI (without nohup)");
+    log::trace!("Shell command: {shell_cmd}");
+    log::trace!("Working directory: {working_dir:?}");
+
+    // Spawn the shell command
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(&shell_cmd)
+        .current_dir(working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+
+    // Capture stderr handle for error reporting
+    let stderr_handle = child.stderr.take();
+
+    // Read the PID from stdout
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let reader = BufReader::new(stdout);
+    let pid_str = reader
+        .lines()
+        .next()
+        .ok_or("No output from shell")?
+        .map_err(|e| format!("Failed to read PID: {e}"))?;
+
+    // Wait for shell to complete
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for shell: {e}"))?;
+
+    if !status.success() {
+        let stderr_output = stderr_handle
+            .map(|stderr| {
+                BufReader::new(stderr)
+                    .lines()
+                    .map_while(Result::ok)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        return Err(format!(
+            "Shell command failed with status: {status}\nStderr: {stderr_output}"
+        ));
+    }
+
+    let pid: u32 = pid_str
+        .parse()
+        .map_err(|e| format!("Failed to parse PID '{pid_str}': {e}"))?;
+
+    log::trace!("Kimi CLI spawned with PID: {pid}");
+
+    Ok(pid)
+}
+
+/// Spawn Kimi CLI as a detached process (Windows).
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_detached_kimi(
+    cli_path: &Path,
+    args: &[String],
+    output_file: &Path,
+    stderr_file: &Path,
+    working_dir: &Path,
+    env_vars: &[(&str, &str)],
+) -> Result<u32, String> {
+    // Windows version can reuse the Codex approach
+    spawn_detached_codex(cli_path, args, output_file, stderr_file, working_dir, env_vars)
+}
+
+/// Spawn Codex CLI as a detached process (Windows).
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_detached_codex(
+    cli_path: &Path,
+    args: &[String],
+    output_file: &Path,
+    stderr_file: &Path,
+    working_dir: &Path,
+    env_vars: &[(&str, &str)],
+) -> Result<u32, String> {
+    use std::fs::OpenOptions;
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    // Open output files
+    let stdout_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(output_file)
+        .map_err(|e| format!("Failed to open output file: {e}"))?;
+
+    let stderr_file_handle = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(stderr_file)
+        .map_err(|e| format!("Failed to open stderr file: {e}"))?;
+
+    log::trace!("Spawning detached Codex CLI on Windows");
+    log::trace!("CLI path: {:?}", cli_path);
+    log::trace!("Working directory: {:?}", working_dir);
+
+    let mut cmd = Command::new(cli_path);
+    cmd.args(args)
+        .current_dir(working_dir)
+        .stdin(Stdio::null())
+        .stdout(stdout_file)
+        .stderr(stderr_file_handle)
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+
+    // Set environment variables
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
+
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn Codex CLI: {e}"))?;
+
+    let pid = child.id();
+    log::trace!("Detached Codex CLI spawned with PID: {pid}");
+
+    Ok(pid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

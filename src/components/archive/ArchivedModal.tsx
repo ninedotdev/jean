@@ -3,13 +3,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { toast } from 'sonner'
 import {
   Archive,
-  Loader2,
   Search,
   Trash2,
   RotateCcw,
   MessageSquare,
   GitBranch,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import {
   Dialog,
   DialogContent,
@@ -505,7 +505,7 @@ export function ArchivedModal({ open, onOpenChange }: ArchivedModalProps) {
 
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <Spinner size={24} className="text-muted-foreground" />
             </div>
           ) : isEmpty ? (
             <div className="text-center py-8 text-muted-foreground">
@@ -727,7 +727,7 @@ export function ArchivedModal({ open, onOpenChange }: ArchivedModalProps) {
               {permanentlyDeleteWorktree.isPending ||
                 deleteArchivedSession.isPending ||
                 isDeletingAll ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                <Spinner size={16} className="mr-2" />
               ) : (
                 <Trash2 className="h-4 w-4 mr-2" />
               )}
@@ -812,7 +812,7 @@ function WorktreeProjectGroup({
                     title="Restore worktree"
                   >
                     {isCurrentlyRestoring ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner size={16} />
                     ) : (
                       <RotateCcw className="h-4 w-4" />
                     )}
@@ -914,7 +914,7 @@ function SessionWorktreeGroup({
                     title="Restore session"
                   >
                     {isCurrentlyRestoring ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner size={16} />
                     ) : (
                       <RotateCcw className="h-4 w-4" />
                     )}
@@ -1019,7 +1019,7 @@ function SearchResultItem({
             title={`Restore ${type}`}
           >
             {isRestoring ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner size={16} />
             ) : (
               <RotateCcw className="h-4 w-4" />
             )}

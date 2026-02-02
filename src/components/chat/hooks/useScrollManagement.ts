@@ -15,6 +15,8 @@ interface UseScrollManagementReturn {
   scrollViewportRef: RefObject<HTMLDivElement | null>
   /** Whether user is at bottom of scroll */
   isAtBottom: boolean
+  /** Whether user is at top of scroll */
+  isAtTop: boolean
   /** Whether findings are visible in viewport */
   areFindingsVisible: boolean
   /** Scroll to bottom with auto-scroll flag */
@@ -37,6 +39,8 @@ export function useScrollManagement({
   const [isAtBottom, setIsAtBottom] = useState(true)
   // Ref to track scroll position without re-renders (for auto-scroll logic)
   const isAtBottomRef = useRef(true)
+  // State for tracking if user is at the top of scroll area
+  const [isAtTop, setIsAtTop] = useState(true)
   // Ref to track if we're currently auto-scrolling (to avoid race conditions)
   const isAutoScrollingRef = useRef(false)
   // State for tracking if findings are visible in viewport
@@ -53,9 +57,9 @@ export function useScrollManagement({
     }
   }, [])
 
-  // Handle scroll events to track if user is at bottom and if findings are visible
+  // Handle scroll events to track if user is at bottom/top and if findings are visible
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    // Skip updating isAtBottom during auto-scroll to avoid race conditions
+    // Skip updating during auto-scroll to avoid race conditions
     // This prevents the smooth scroll animation from incorrectly marking us as "not at bottom"
     if (isAutoScrollingRef.current) {
       return
@@ -63,10 +67,15 @@ export function useScrollManagement({
 
     const target = e.target as HTMLDivElement
     const { scrollTop, scrollHeight, clientHeight } = target
+
     // Consider "at bottom" if within 100px of the bottom
     const atBottom = scrollHeight - scrollTop - clientHeight < 100
     isAtBottomRef.current = atBottom
     setIsAtBottom(atBottom)
+
+    // Consider "at top" if within 100px of the top
+    const atTop = scrollTop < 100
+    setIsAtTop(atTop)
 
     // Check if findings element is visible in the viewport
     const findingsEl = target.querySelector('[data-review-findings="unfixed"]')
@@ -167,6 +176,7 @@ export function useScrollManagement({
   return {
     scrollViewportRef,
     isAtBottom,
+    isAtTop,
     areFindingsVisible,
     scrollToBottom,
     scrollToFindings,

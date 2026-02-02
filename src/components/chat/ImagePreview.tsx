@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { X } from 'lucide-react'
-import { invoke } from '@tauri-apps/api/core'
 import type { PendingImage } from '@/types/chat'
 import { ImageLightbox } from './ImageLightbox'
+import { useDeletePastedImage } from '@/services/files'
 
 interface ImagePreviewProps {
   /** Array of pending images to display */
@@ -22,25 +22,22 @@ export function ImagePreview({
   onRemove,
   disabled,
 }: ImagePreviewProps) {
+  const deletePastedImage = useDeletePastedImage()
+
   const handleRemove = useCallback(
-    async (e: React.MouseEvent, image: PendingImage) => {
+    (e: React.MouseEvent, image: PendingImage) => {
       // Prevent the click from bubbling to the lightbox
       e.stopPropagation()
 
       if (disabled) return
 
-      // Delete the file from disk
-      try {
-        await invoke('delete_pasted_image', { path: image.path })
-      } catch (error) {
-        console.error('Failed to delete image:', error)
-        // Still remove from UI even if delete fails
-      }
+      // Delete the file from disk (fires and forgets - still removes from UI even if delete fails)
+      deletePastedImage.mutate({ path: image.path })
 
       // Remove from store
       onRemove(image.id)
     },
-    [disabled, onRemove]
+    [disabled, onRemove, deletePastedImage]
   )
 
   if (images.length === 0) return null

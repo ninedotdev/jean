@@ -78,6 +78,8 @@ export const ChatInput = memo(function ChatInput({
     left: number
   } | null>(null)
   const [slashTriggerIndex, setSlashTriggerIndex] = useState<number | null>(null)
+  // Track if slash is at prompt start (computed when slash is triggered, stored in state)
+  const [isSlashAtPromptStart, setIsSlashAtPromptStart] = useState(false)
 
   // Refs to expose navigation methods from popovers
   const fileMentionHandleRef = useRef<FileMentionPopoverHandle | null>(null)
@@ -263,7 +265,12 @@ export const ChatInput = memo(function ChatInput({
             charBeforeSlash === ' ' ||
             charBeforeSlash === '\n'
           ) {
-            setSlashTriggerIndex(cursorPos - 1)
+            const triggerIndex = cursorPos - 1
+            setSlashTriggerIndex(triggerIndex)
+            // Determine if slash is at prompt start (no non-whitespace before it)
+            setIsSlashAtPromptStart(
+              triggerIndex === 0 || value.slice(0, triggerIndex).trim() === ''
+            )
             setSlashQuery('')
             setSlashPopoverOpen(true)
 
@@ -292,6 +299,7 @@ export const ChatInput = memo(function ChatInput({
             setSlashPopoverOpen(false)
             setSlashTriggerIndex(null)
             setSlashQuery('')
+            setIsSlashAtPromptStart(false)
           } else {
             setSlashQuery(query)
           }
@@ -378,6 +386,7 @@ export const ChatInput = memo(function ChatInput({
             setSlashPopoverOpen(false)
             setSlashTriggerIndex(null)
             setSlashQuery('')
+            setIsSlashAtPromptStart(false)
             return
         }
       }
@@ -606,6 +615,7 @@ export const ChatInput = memo(function ChatInput({
       setSlashPopoverOpen(false)
       setSlashTriggerIndex(null)
       setSlashQuery('')
+      setIsSlashAtPromptStart(false)
 
       // Refocus input
       inputRef.current?.focus()
@@ -627,6 +637,7 @@ export const ChatInput = memo(function ChatInput({
       setSlashPopoverOpen(false)
       setSlashTriggerIndex(null)
       setSlashQuery('')
+      setIsSlashAtPromptStart(false)
       setShowHint(true)
 
       // Notify parent to execute command
@@ -635,11 +646,8 @@ export const ChatInput = memo(function ChatInput({
     [inputRef, onCommandExecute]
   )
 
-  // Determine if slash is at prompt start (for enabling commands)
-  const isSlashAtPromptStart =
-    slashTriggerIndex !== null &&
-    (slashTriggerIndex === 0 ||
-      valueRef.current.slice(0, slashTriggerIndex).trim() === '')
+  // isSlashAtPromptStart is now tracked as state (set when slash is triggered)
+  // to avoid reading refs during render which triggers React Compiler warnings
 
   return (
     <div className="relative">

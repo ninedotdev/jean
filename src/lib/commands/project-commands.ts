@@ -1,4 +1,4 @@
-import { FolderPlus, FolderGit, Trash2 } from 'lucide-react'
+import { FolderPlus, FolderGit, Trash2, Download } from 'lucide-react'
 import type { AppCommand } from './types'
 
 export const projectCommands: AppCommand[] = [
@@ -25,6 +25,32 @@ export const projectCommands: AppCommand[] = [
 
     execute: context => {
       context.initProject()
+    },
+  },
+
+  {
+    id: 'clone-github-repo',
+    label: 'Clone from GitHub',
+    description: 'Clone a repository from GitHub',
+    icon: Download,
+    group: 'projects',
+    keywords: ['clone', 'github', 'repository', 'download', 'git'],
+
+    execute: context => {
+      context.cloneFromGitHub()
+    },
+  },
+
+  {
+    id: 'clone-gitlab-repo',
+    label: 'Clone from GitLab',
+    description: 'Clone a repository from GitLab',
+    icon: Download,
+    group: 'projects',
+    keywords: ['clone', 'gitlab', 'repository', 'download', 'git'],
+
+    execute: context => {
+      context.cloneFromGitLab()
     },
   },
 

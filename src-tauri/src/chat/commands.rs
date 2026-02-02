@@ -1,7 +1,11 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use tauri::async_runtime::{spawn, spawn_blocking, Mutex};
+use tokio::sync::Semaphore;
 
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -1033,6 +1037,28 @@ pub async fn send_chat_message(
         }
         "codex" => {
             log::trace!("Using Codex CLI for provider: {effective_provider}");
+
+            // Load full session history to provide context
+            // Codex CLI is stateless, so we must provide the full conversation history
+            let history = run_log::load_session_messages(&app, &session_id)
+                .unwrap_or_default();
+
+            let mut full_prompt = String::new();
+            for msg in history {
+                let role = match msg.role {
+                    MessageRole::User => "User",
+                    MessageRole::Assistant => "Assistant",
+                };
+                full_prompt.push_str(&format!("{}: {}\n\n", role, msg.content));
+            }
+
+            // Overwrite the input file with the full history
+            if let Err(e) = std::fs::write(&input_file, &full_prompt) {
+                log::warn!("Failed to write full history to input file: {e}");
+            } else {
+                 log::trace!("Wrote full history to input file for Codex ({} bytes)", full_prompt.len());
+            }
+
             super::codex::execute_codex_detached(
                 &app,
                 &session_id,
@@ -1043,6 +1069,44 @@ pub async fn send_chat_message(
                 model.as_deref(),
                 execution_mode.as_deref(),
                 thinking_level.as_ref().map(|t| t.as_str()),
+                &full_prompt,
+            )?
+        }
+        "kimi" => {
+            log::trace!("Using Kimi CLI for provider: {effective_provider}");
+
+            // Load full session history to provide context
+            // Kimi CLI is stateless, so we must provide the full conversation history
+            let history = run_log::load_session_messages(&app, &session_id)
+                .unwrap_or_default();
+
+            let mut full_prompt = String::new();
+            for msg in history {
+                let role = match msg.role {
+                    MessageRole::User => "User",
+                    MessageRole::Assistant => "Assistant",
+                };
+                full_prompt.push_str(&format!("{}: {}\n\n", role, msg.content));
+            }
+
+            // Overwrite the input file with the full history
+            if let Err(e) = std::fs::write(&input_file, &full_prompt) {
+                log::warn!("Failed to write full history to input file: {e}");
+            } else {
+                log::trace!("Wrote full history to input file for Kimi ({} bytes)", full_prompt.len());
+            }
+
+            super::kimi::execute_kimi_detached(
+                &app,
+                &session_id,
+                &worktree_id,
+                &input_file,
+                &output_file,
+                context.worktree_path.as_ref(),
+                model.as_deref(),
+                execution_mode.as_deref(),
+                thinking_level.as_ref().map(|t| t.as_str()),
+                &full_prompt,
             )?
         }
         _ => {
@@ -1273,8 +1337,14 @@ pub async fn set_session_model(
 
     with_sessions_mut(&app, &worktree_path, &worktree_id, |sessions| {
         if let Some(session) = sessions.find_session_mut(&session_id) {
-            if let Some(m) = model {
-                session.selected_model = Some(m);
+            if let Some(m) = model.clone() {
+                session.selected_model = Some(m.clone());
+
+                // If provider not explicitly set, infer from model to prevent mismatches
+                // This handles legacy sessions and ensures provider/model stay in sync
+                if provider.is_none() {
+                    session.selected_provider = Some(infer_provider_from_model(&m));
+                }
             }
             if let Some(p) = provider {
                 session.selected_provider = Some(p);
@@ -1285,6 +1355,26 @@ pub async fn set_session_model(
             Err(format!("Session not found: {session_id}"))
         }
     })
+}
+
+/// Infers AI provider from model string
+fn infer_provider_from_model(model: &str) -> String {
+    let model_lower = model.to_lowercase();
+
+    if model_lower.contains("gemini") {
+        "gemini".to_string()
+    } else if model_lower.contains("gpt") || model_lower.contains("o1") || model_lower.contains("o3") {
+        "codex".to_string()  // OpenAI models use Codex CLI
+    } else if model_lower.contains("claude") || model_lower.contains("opus") ||
+              model_lower.contains("sonnet") || model_lower.contains("haiku") {
+        "claude".to_string()
+    } else if model_lower.contains("codex") {
+        "codex".to_string()
+    } else if model_lower.contains("kimi") || model_lower.contains("moonshot") {
+        "kimi".to_string()
+    } else {
+        "claude".to_string()  // Default fallback
+    }
 }
 
 /// Set the selected thinking level for a session
@@ -2197,6 +2287,10 @@ Format the summary as clean markdown. Be concise but capture the reasoning behin
 /// JSON schema for structured context summarization output
 const CONTEXT_SUMMARY_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string","description":"The markdown context summary including main goal, key decisions with rationale, trade-offs considered, problems solved, current state, unresolved questions, key files/patterns, and next steps"},"slug":{"type":"string","description":"A 2-4 word lowercase hyphenated slug describing the main topic (e.g. implement-magic-commands, fix-auth-bug)"}},"required":["summary","slug"]}"#;
 
+/// JSON schema for orchestration manifest generation
+/// Claude analyzes the conversation and prepares detailed instructions for each task
+const ORCHESTRATION_MANIFEST_SCHEMA: &str = r#"{"type":"object","properties":{"overall_context":{"type":"string","description":"A 2-3 paragraph summary of the overall goal, key decisions made, and project context that all task executors should understand"},"project_notes":{"type":"string","description":"Technical notes about the project: tech stack, coding patterns, important conventions discovered during planning"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"original_description":{"type":"string"},"instructions":{"type":"string","description":"Detailed 3-5 paragraph instructions for executing this task. Include: what to do, how to approach it, what to watch out for, acceptance criteria"},"relevant_files":{"type":"array","items":{"type":"string"},"description":"File paths that should be read or modified for this task"},"context_notes":{"type":"array","items":{"type":"string"},"description":"Key decisions or context from the conversation relevant to this task"},"depends_on":{"type":"array","items":{"type":"string"},"description":"IDs of tasks that must complete before this one"},"can_parallelize":{"type":"boolean"},"suggested_order":{"type":"integer"},"recommended_provider":{"type":"string","enum":["claude","gemini","codex"],"description":"Best provider for this task type"},"recommended_model":{"type":"string"},"recommendation_reason":{"type":"string"}},"required":["id","original_description","instructions","relevant_files","context_notes","depends_on","can_parallelize","suggested_order","recommended_provider","recommended_model","recommendation_reason"]}}},"required":["overall_context","project_notes","tasks"]}"#;
+
 /// Format chat messages into a conversation history string for summarization
 fn format_messages_for_summary(messages: &[ChatMessage]) -> String {
     if messages.is_empty() {
@@ -2998,6 +3092,892 @@ pub async fn generate_session_digest(
 
     // Call Claude CLI with JSON schema (non-streaming)
     execute_digest_claude(&app, &prompt, &prefs.session_recap_model)
+}
+
+// ============================================================================
+// Multi-Model Delegation
+// ============================================================================
+
+use super::types::{
+    DelegatedTask, DelegationCompletedEvent, DelegationTaskCompletedEvent,
+    DelegationTaskFailedEvent, DelegationTaskStartedEvent,
+};
+
+/// Execute a plan with multi-model delegation
+/// Each task is executed sequentially with its assigned provider/model
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_delegated_tasks(
+    app: tauri::AppHandle,
+    session_id: String,
+    worktree_id: String,
+    worktree_path: String,
+    tasks: Vec<DelegatedTask>,
+    execution_mode: Option<String>,
+    thinking_level: Option<ThinkingLevel>,
+) -> Result<Vec<DelegatedTask>, String> {
+    use tauri::Emitter;
+
+    log::info!(
+        "Starting delegated execution: {} tasks for session {}",
+        tasks.len(),
+        session_id
+    );
+
+    if tasks.is_empty() {
+        return Err("No tasks provided for delegation".to_string());
+    }
+
+    let total_tasks = tasks.len();
+    let mut results: Vec<DelegatedTask> = Vec::with_capacity(total_tasks);
+    let mut completed_count = 0;
+    let mut failed_count = 0;
+
+    // Build context for execution
+    let context = ClaudeContext::new(worktree_path.clone());
+
+    for (index, task) in tasks.into_iter().enumerate() {
+        let task_id = task.id.clone();
+        let provider = task.assigned_provider.clone();
+        let model = task.assigned_model.clone();
+
+        log::info!(
+            "Executing task {}/{}: {} with {}/{}",
+            index + 1,
+            total_tasks,
+            task.description,
+            provider,
+            model
+        );
+
+        // Emit task started event
+        let started_event = DelegationTaskStartedEvent {
+            session_id: session_id.clone(),
+            worktree_id: worktree_id.clone(),
+            task_id: task_id.clone(),
+            task_index: index,
+            total_tasks,
+            provider: provider.clone(),
+            model: model.clone(),
+        };
+        if let Err(e) = app.emit("delegation:task-started", &started_event) {
+            log::warn!("Failed to emit delegation:task-started event: {e}");
+        }
+
+        // Build the task prompt - instruct the model to execute just this task
+        let task_prompt = format!(
+            "Execute the following task from a plan:\n\n**Task {}:** {}\n\nComplete this task now. Focus only on this specific task.",
+            index + 1,
+            task.description
+        );
+
+        // Execute the task with the assigned provider/model
+        let working_dir = context.worktree_path.as_str();
+        let task_result = execute_single_delegated_task(
+            &app,
+            &session_id,
+            &worktree_id,
+            &worktree_path,
+            &task_prompt,
+            &provider,
+            &model,
+            execution_mode.as_deref(),
+            thinking_level.as_ref(),
+            working_dir,
+        );
+
+        match task_result {
+            Ok(output) => {
+                completed_count += 1;
+
+                // Emit task completed event
+                let completed_event = DelegationTaskCompletedEvent {
+                    session_id: session_id.clone(),
+                    worktree_id: worktree_id.clone(),
+                    task_id: task_id.clone(),
+                    task_index: index,
+                    total_tasks,
+                    output: Some(output.clone()),
+                };
+                if let Err(e) = app.emit("delegation:task-completed", &completed_event) {
+                    log::warn!("Failed to emit delegation:task-completed event: {e}");
+                }
+
+                results.push(DelegatedTask {
+                    id: task_id,
+                    description: task.description,
+                    assigned_provider: provider,
+                    assigned_model: model,
+                    status: "completed".to_string(),
+                    error: None,
+                    output: Some(output),
+                });
+            }
+            Err(error) => {
+                failed_count += 1;
+
+                // Emit task failed event
+                let failed_event = DelegationTaskFailedEvent {
+                    session_id: session_id.clone(),
+                    worktree_id: worktree_id.clone(),
+                    task_id: task_id.clone(),
+                    task_index: index,
+                    total_tasks,
+                    error: error.clone(),
+                };
+                if let Err(e) = app.emit("delegation:task-failed", &failed_event) {
+                    log::warn!("Failed to emit delegation:task-failed event: {e}");
+                }
+
+                results.push(DelegatedTask {
+                    id: task_id,
+                    description: task.description,
+                    assigned_provider: provider,
+                    assigned_model: model,
+                    status: "failed".to_string(),
+                    error: Some(error),
+                    output: None,
+                });
+
+                // Continue with remaining tasks even if one fails
+            }
+        }
+    }
+
+    // Emit delegation completed event
+    let completed_event = DelegationCompletedEvent {
+        session_id: session_id.clone(),
+        worktree_id: worktree_id.clone(),
+        total_tasks,
+        completed_tasks: completed_count,
+        failed_tasks: failed_count,
+    };
+    if let Err(e) = app.emit("delegation:completed", &completed_event) {
+        log::warn!("Failed to emit delegation:completed event: {e}");
+    }
+
+    log::info!(
+        "Delegation completed: {}/{} tasks succeeded, {} failed",
+        completed_count,
+        total_tasks,
+        failed_count
+    );
+
+    Ok(results)
+}
+
+/// Execute a single delegated task with the specified provider/model
+fn execute_single_delegated_task(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    worktree_id: &str,
+    _worktree_path: &str,
+    prompt: &str,
+    provider: &str,
+    model: &str,
+    execution_mode: Option<&str>,
+    thinking_level: Option<&ThinkingLevel>,
+    working_dir: &str,
+) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    // Build command based on provider
+    let (cmd_name, args): (String, Vec<String>) = match provider {
+        "gemini" => {
+            // Gemini CLI: gemini [query..] with options
+            // Use --approval-mode yolo for auto-approval, -o json for parseable output
+            let mut args = vec![
+                "--approval-mode".to_string(),
+                "yolo".to_string(),
+                "-o".to_string(),
+                "json".to_string(),
+            ];
+            if !model.is_empty() {
+                args.push("-m".to_string());
+                args.push(model.to_string());
+            }
+            // Query goes at the end as positional argument
+            args.push(prompt.to_string());
+            ("gemini".to_string(), args)
+        }
+        "codex" => {
+            // Codex CLI: codex exec for non-interactive execution
+            let mut args = vec![
+                "exec".to_string(),
+                "--full-auto".to_string(),
+                "-C".to_string(),
+                working_dir.to_string(),
+            ];
+            if !model.is_empty() {
+                args.push("-m".to_string());
+                args.push(model.to_string());
+            }
+            // Prompt goes at the end as positional argument
+            args.push(prompt.to_string());
+            ("codex".to_string(), args)
+        }
+        _ => {
+            // Default to Claude
+            let mut args = vec![
+                "--print".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ];
+            if !model.is_empty() {
+                args.push("--model".to_string());
+                args.push(model.to_string());
+            }
+            if let Some(mode) = execution_mode {
+                match mode {
+                    "yolo" => args.push("--allowedTools='*'".to_string()),
+                    "plan" => {
+                        args.push("--plan-mode-tools-only".to_string());
+                        args.push("--allowedTools=Write,Edit,Bash,Read,Glob,Grep".to_string());
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(thinking) = thinking_level {
+                let settings = if thinking.is_enabled() {
+                    r#"{"alwaysThinkingEnabled": true}"#
+                } else {
+                    r#"{"alwaysThinkingEnabled": false}"#
+                };
+                args.push("--settings".to_string());
+                args.push(settings.to_string());
+            }
+            args.push("-p".to_string());
+            args.push(prompt.to_string());
+
+            // Use bundled Claude CLI if available, otherwise fallback to PATH
+            let binary_path = crate::claude_cli::get_cli_binary_path(app)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "claude".to_string());
+            
+            (binary_path, args)
+        }
+    };
+
+    log::trace!(
+        "Executing delegated task with {}: {} {:?}",
+        provider,
+        cmd_name,
+        args
+    );
+
+    // Execute the command
+    let mut cmd = Command::new(&cmd_name);
+    cmd.args(&args)
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // For Claude with thinking enabled, set MAX_THINKING_TOKENS env var
+    if provider == "claude" || provider.is_empty() || provider == "_" {
+        if let Some(thinking) = thinking_level {
+            if let Some(tokens) = thinking.thinking_tokens() {
+                cmd.env("MAX_THINKING_TOKENS", tokens.to_string());
+            }
+        }
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn {}: {}", cmd_name, e))?;
+
+    // Collect output
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let reader = BufReader::new(stdout);
+    let mut output = String::new();
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(|e| format!("Failed to read line: {}", e))?;
+
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&line);
+
+        // Emit streaming content for this task
+        use tauri::Emitter;
+        let stream_event = serde_json::json!({
+            "session_id": session_id,
+            "worktree_id": worktree_id,
+            "content": line,
+        });
+        let _ = app.emit("delegation:task-output", &stream_event);
+    }
+
+    // Wait for completion
+    let status = child.wait().map_err(|e| format!("Failed to wait for process: {}", e))?;
+
+    if !status.success() {
+        // Capture stderr for better error messages
+        let stderr = child
+            .stderr
+            .take()
+            .map(|s| {
+                let reader = BufReader::new(s);
+                reader
+                    .lines()
+                    .filter_map(|l| l.ok())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        return Err(format!(
+            "Task execution failed with exit code: {:?}. Stderr: {}",
+            status.code(),
+            if stderr.is_empty() {
+                "(empty)"
+            } else {
+                &stderr
+            }
+        ));
+    }
+
+    Ok(output)
+}
+
+// ============================================================================
+// Claude Orchestrator (Intelligent Multi-Model Delegation)
+// ============================================================================
+
+use super::types::{DelegationManifest, OrchestrationTask, TaskAssignment};
+
+/// Generate an orchestration manifest from a plan
+/// Claude analyzes the conversation and prepares detailed instructions for each task
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_delegation_manifest(
+    app: tauri::AppHandle,
+    session_id: String,
+    worktree_id: String,
+    worktree_path: String,
+    plan_content: String,
+    messages: Vec<ChatMessage>,
+) -> Result<DelegationManifest, String> {
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    log::info!(
+        "Generating orchestration manifest for session {} with {} messages",
+        session_id,
+        messages.len()
+    );
+
+    // Emit progress event
+    let _ = app.emit(
+        "orchestration:generating",
+        serde_json::json!({
+            "sessionId": session_id,
+            "worktreeId": worktree_id,
+        }),
+    );
+
+    // Format conversation for context
+    let conversation = format_messages_for_summary(&messages);
+
+    // Build prompt for orchestration with strict granularity rules
+    let prompt = format!(
+        r#"You are an orchestration specialist preparing a delegation manifest for multi-model execution.
+
+## CRITICAL: Task Granularity Rules
+- Create ONLY 5-15 HIGH-LEVEL tasks MAXIMUM
+- Each task must be a COMPLETE, COHERENT unit of work
+- Think like a senior developer - what are the logical PHASES?
+- Group ALL related implementation details into SINGLE tasks
+- DO NOT create micro-tasks for individual components, files, or styling
+
+### Good Examples (HIGH-LEVEL):
+- "Implement responsive navbar with navigation links and auth buttons"
+- "Build hero section with headline, CTA, and background image"
+- "Create features grid with icons, titles, and descriptions"
+- "Set up authentication flow with login/signup forms"
+
+### Bad Examples (TOO GRANULAR - NEVER DO THIS):
+- "Create nav container div"
+- "Add home link to nav"
+- "Style nav background color"
+- "Create button component"
+- "Add padding to section"
+
+## The Plan to Execute
+{plan_content}
+
+## Conversation Context
+{conversation}
+
+## Your Task
+Generate a delegation manifest with:
+
+1. **overall_context**: 2-3 paragraphs summarizing the goal, key decisions, and context that ALL task executors need to understand.
+
+2. **project_notes**: Technical notes about the project - tech stack, coding patterns, conventions discovered during planning.
+
+3. **tasks**: 5-15 HIGH-LEVEL tasks only (group related work together):
+   - **id**: Task identifier (task-0, task-1, etc.)
+   - **original_description**: Brief task summary (the complete feature/phase)
+   - **instructions**: 3-5 detailed paragraphs with:
+     - What exactly to do (the FULL feature, not micro-steps)
+     - How to approach it
+     - What to watch out for
+     - Acceptance criteria
+   - **relevant_files**: File paths to read/modify
+   - **context_notes**: Key decisions/context for this specific task
+   - **depends_on**: IDs of tasks that must complete first
+   - **can_parallelize**: Can this run in parallel with others?
+   - **suggested_order**: Execution order (1 = first)
+   - **recommended_provider**: "claude" (complex reasoning), "gemini" (speed), or "codex" (code-heavy)
+   - **recommended_model**: Specific model name
+   - **recommendation_reason**: Why this provider/model is best
+
+REMEMBER: 5-15 tasks MAXIMUM. Each task = complete feature/phase, NOT individual steps.
+Be thorough in instructions - executors will NOT have access to the original conversation."#
+    );
+
+    // Get Claude CLI path
+    let binary_path = crate::claude_cli::get_cli_binary_path(&app)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "claude".to_string());
+
+    // Execute Claude CLI with JSON schema
+    let mut cmd = Command::new(&binary_path);
+    cmd.args([
+        "--print",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--max-turns",
+        "1",
+        "--json-schema",
+        ORCHESTRATION_MANIFEST_SCHEMA,
+    ]);
+
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(&worktree_path);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn Claude CLI: {e}"))?;
+
+    // Write prompt to stdin as properly formatted stream-json message
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
+        let input_message = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": prompt
+            }
+        });
+        writeln!(stdin, "{input_message}").map_err(|e| format!("Failed to write to stdin: {e}"))?;
+    }
+
+    // Wait for output
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for Claude CLI: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Claude CLI failed: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Extract structured output
+    let result = extract_text_from_stream_json(&stdout)?;
+    let manifest_data: serde_json::Value =
+        serde_json::from_str(&result).map_err(|e| format!("Failed to parse manifest JSON: {e}"))?;
+
+    // Parse tasks from the response
+    let tasks = parse_orchestration_tasks(&manifest_data["tasks"])?;
+
+    // Build the manifest
+    let manifest = DelegationManifest {
+        session_id: session_id.clone(),
+        worktree_id: worktree_id.clone(),
+        original_plan: plan_content,
+        overall_context: manifest_data["overall_context"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        project_notes: manifest_data["project_notes"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        tasks,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+
+    // Emit completion event
+    let _ = app.emit(
+        "orchestration:generated",
+        serde_json::json!({
+            "sessionId": session_id,
+            "worktreeId": worktree_id,
+            "taskCount": manifest.tasks.len(),
+        }),
+    );
+
+    log::info!(
+        "Generated orchestration manifest with {} tasks",
+        manifest.tasks.len()
+    );
+
+    Ok(manifest)
+}
+
+/// Parse orchestration tasks from JSON
+fn parse_orchestration_tasks(tasks_json: &serde_json::Value) -> Result<Vec<OrchestrationTask>, String> {
+    let tasks_array = tasks_json
+        .as_array()
+        .ok_or("tasks must be an array")?;
+
+    let mut tasks = Vec::with_capacity(tasks_array.len());
+
+    for (i, task_json) in tasks_array.iter().enumerate() {
+        let task = OrchestrationTask {
+            id: task_json["id"]
+                .as_str()
+                .unwrap_or(&format!("task-{i}"))
+                .to_string(),
+            original_description: task_json["original_description"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            instructions: task_json["instructions"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            relevant_files: task_json["relevant_files"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            context_notes: task_json["context_notes"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            depends_on: task_json["depends_on"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            can_parallelize: task_json["can_parallelize"].as_bool().unwrap_or(false),
+            suggested_order: task_json["suggested_order"].as_u64().unwrap_or(i as u64 + 1) as u32,
+            recommended_provider: task_json["recommended_provider"]
+                .as_str()
+                .unwrap_or("claude")
+                .to_string(),
+            recommended_model: task_json["recommended_model"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            recommendation_reason: task_json["recommendation_reason"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+        };
+        tasks.push(task);
+    }
+
+    Ok(tasks)
+}
+
+/// Maximum number of tasks to execute concurrently
+/// Set to 2 to balance speed vs stability (prevent crashes from too many CLI processes)
+const MAX_CONCURRENT_TASKS: usize = 2;
+
+/// Execute a plan with intelligent orchestration
+/// Each task is executed with rich context from the manifest
+/// Uses semaphore to limit concurrent execution to MAX_CONCURRENT_TASKS
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_orchestrated_tasks(
+    app: tauri::AppHandle,
+    session_id: String,
+    worktree_id: String,
+    worktree_path: String,
+    manifest: DelegationManifest,
+    task_assignments: Vec<TaskAssignment>,
+    execution_mode: Option<String>,
+    thinking_level: Option<ThinkingLevel>,
+) -> Result<Vec<DelegatedTask>, String> {
+    use tauri::Emitter;
+
+    log::info!(
+        "Starting orchestrated execution: {} tasks (max {} concurrent) for session {}",
+        manifest.tasks.len(),
+        MAX_CONCURRENT_TASKS,
+        session_id
+    );
+
+    if manifest.tasks.is_empty() {
+        return Err("No tasks in manifest".to_string());
+    }
+
+    let total_tasks = manifest.tasks.len();
+
+    // Use Arc for shared state across tasks
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TASKS));
+    let results = Arc::new(Mutex::new(Vec::<DelegatedTask>::with_capacity(total_tasks)));
+    let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Build assignment map for quick lookup
+    let assignment_map: std::collections::HashMap<String, TaskAssignment> = task_assignments
+        .into_iter()
+        .map(|a| (a.task_id.clone(), a))
+        .collect();
+    let assignment_map = Arc::new(assignment_map);
+
+    let mut handles = Vec::new();
+
+    for (index, task) in manifest.tasks.iter().enumerate() {
+        // Clone all needed data for the spawned task
+        let permit = semaphore.clone();
+        let app = app.clone();
+        let session_id = session_id.clone();
+        let worktree_id = worktree_id.clone();
+        let worktree_path = worktree_path.clone();
+        let manifest = manifest.clone();
+        let task = task.clone();
+        let assignment_map = assignment_map.clone();
+        let results = results.clone();
+        let completed_count = completed_count.clone();
+        let failed_count = failed_count.clone();
+        let execution_mode = execution_mode.clone();
+        let thinking_level = thinking_level.clone();
+
+        let handle = spawn(async move {
+            // Acquire semaphore permit (blocks if MAX_CONCURRENT_TASKS already running)
+            let _permit = permit.acquire().await.expect("Semaphore closed");
+
+            // Get provider/model from assignment or use recommended
+            let (provider, model) = if let Some(assignment) = assignment_map.get(&task.id) {
+                (assignment.provider.clone(), assignment.model.clone())
+            } else {
+                (
+                    task.recommended_provider.clone(),
+                    task.recommended_model.clone(),
+                )
+            };
+
+            // Emit task started event
+            let _ = app.emit(
+                "delegation:task-started",
+                DelegationTaskStartedEvent {
+                    session_id: session_id.clone(),
+                    worktree_id: worktree_id.clone(),
+                    task_id: task.id.clone(),
+                    task_index: index,
+                    total_tasks,
+                    provider: provider.clone(),
+                    model: model.clone(),
+                },
+            );
+
+            log::info!(
+                "Executing orchestrated task {}/{}: {} with {}/{}",
+                index + 1,
+                total_tasks,
+                task.original_description,
+                provider,
+                model
+            );
+
+            // Build rich prompt with all context
+            let task_prompt = build_orchestrated_prompt(&manifest, &task);
+
+            // Execute the blocking task in a separate thread pool
+            let exec_app = app.clone();
+            let exec_session_id = session_id.clone();
+            let exec_worktree_id = worktree_id.clone();
+            let exec_worktree_path = worktree_path.clone();
+            let exec_provider = provider.clone();
+            let exec_model = model.clone();
+            let exec_mode = execution_mode.clone();
+            let exec_thinking = thinking_level.clone();
+
+            let result = spawn_blocking(move || {
+                execute_single_delegated_task(
+                    &exec_app,
+                    &exec_session_id,
+                    &exec_worktree_id,
+                    &exec_worktree_path,
+                    &task_prompt,
+                    &exec_provider,
+                    &exec_model,
+                    exec_mode.as_deref(),
+                    exec_thinking.as_ref(),
+                    &exec_worktree_path,
+                )
+            })
+            .await
+            .map_err(|e| format!("Task panicked: {e}"))?;
+
+            let delegated_task = match result {
+                Ok(output) => {
+                    completed_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                    let _ = app.emit(
+                        "delegation:task-completed",
+                        DelegationTaskCompletedEvent {
+                            session_id: session_id.clone(),
+                            worktree_id: worktree_id.clone(),
+                            task_id: task.id.clone(),
+                            task_index: index,
+                            total_tasks,
+                            output: Some(output.clone()),
+                        },
+                    );
+
+                    DelegatedTask {
+                        id: task.id.clone(),
+                        description: task.original_description.clone(),
+                        assigned_provider: provider,
+                        assigned_model: model,
+                        status: "completed".to_string(),
+                        error: None,
+                        output: Some(output),
+                    }
+                }
+                Err(error) => {
+                    failed_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                    let _ = app.emit(
+                        "delegation:task-failed",
+                        DelegationTaskFailedEvent {
+                            session_id: session_id.clone(),
+                            worktree_id: worktree_id.clone(),
+                            task_id: task.id.clone(),
+                            task_index: index,
+                            total_tasks,
+                            error: error.clone(),
+                        },
+                    );
+
+                    DelegatedTask {
+                        id: task.id.clone(),
+                        description: task.original_description.clone(),
+                        assigned_provider: provider,
+                        assigned_model: model,
+                        status: "failed".to_string(),
+                        error: Some(error),
+                        output: None,
+                    }
+                }
+            };
+
+            // Store result
+            results.lock().await.push(delegated_task);
+
+            Ok::<(), String>(())
+            // _permit is dropped here, releasing the semaphore
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all tasks to complete
+    for handle in handles {
+        if let Err(e) = handle.await {
+            log::error!("Task join error: {e}");
+        }
+    }
+
+    let final_completed = completed_count.load(std::sync::atomic::Ordering::SeqCst);
+    let final_failed = failed_count.load(std::sync::atomic::Ordering::SeqCst);
+
+    // Emit completion event
+    let _ = app.emit(
+        "delegation:completed",
+        DelegationCompletedEvent {
+            session_id: session_id.clone(),
+            worktree_id: worktree_id.clone(),
+            total_tasks,
+            completed_tasks: final_completed,
+            failed_tasks: final_failed,
+        },
+    );
+
+    log::info!(
+        "Orchestrated execution completed: {}/{} tasks succeeded, {} failed",
+        final_completed,
+        total_tasks,
+        final_failed
+    );
+
+    let final_results = results.lock().await.clone();
+    Ok(final_results)
+}
+
+/// Build a rich prompt with full context from the orchestration manifest
+fn build_orchestrated_prompt(manifest: &DelegationManifest, task: &OrchestrationTask) -> String {
+    let relevant_files = if task.relevant_files.is_empty() {
+        "None specified".to_string()
+    } else {
+        task.relevant_files
+            .iter()
+            .map(|f| format!("- {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let context_notes = if task.context_notes.is_empty() {
+        "None specified".to_string()
+    } else {
+        task.context_notes
+            .iter()
+            .map(|n| format!("- {n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        r#"## Project Context
+{overall_context}
+
+## Technical Notes
+{project_notes}
+
+## Your Task
+{instructions}
+
+## Relevant Files
+{relevant_files}
+
+## Important Context
+{context_notes}
+
+---
+
+Execute this task now. Focus only on the work described above. Do not ask for clarification - use your best judgment based on the context provided."#,
+        overall_context = manifest.overall_context,
+        project_notes = manifest.project_notes,
+        instructions = task.instructions,
+    )
 }
 
 #[cfg(test)]

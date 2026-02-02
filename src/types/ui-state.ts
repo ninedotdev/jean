@@ -18,6 +18,12 @@ export interface UIState {
   left_sidebar_size?: number
   /** Left sidebar visibility, defaults to true */
   left_sidebar_visible?: boolean
+  /** Right sidebar width in pixels, defaults to 280 */
+  right_sidebar_size?: number
+  /** Right sidebar visibility, defaults to false */
+  right_sidebar_visible?: boolean
+  /** Active right panel tab: 'files' | 'changes' | 'checks', defaults to 'files' */
+  active_right_panel_tab?: string
   /** Active session ID per worktree (for restoring open tabs) */
   active_session_ids: Record<string, string>
   /** AI review results per worktree: worktreeId → ReviewResponse */
@@ -39,6 +45,9 @@ export const defaultUIState: UIState = {
   expanded_folder_ids: [],
   left_sidebar_size: 250,
   left_sidebar_visible: true,
+  right_sidebar_size: 280,
+  right_sidebar_visible: true,
+  active_right_panel_tab: 'files',
   active_session_ids: {},
   review_results: {},
   viewing_review_tab: {},

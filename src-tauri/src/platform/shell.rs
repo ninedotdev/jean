@@ -1,11 +1,12 @@
 // Cross-platform shell detection and command execution
 
+#[cfg(unix)]
 use std::env;
 use std::process::Command;
 
 /// Returns the user's default shell path
 /// - Unix: Uses $SHELL env var, falls back to /bin/sh
-/// - Windows: Returns powershell.exe (for general shell tasks)
+/// - Windows: Returns cmd.exe (handles quoted paths naturally)
 #[cfg(unix)]
 pub fn get_default_shell() -> String {
     env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
@@ -13,12 +14,12 @@ pub fn get_default_shell() -> String {
 
 #[cfg(windows)]
 pub fn get_default_shell() -> String {
-    "powershell.exe".to_string()
+    "cmd.exe".to_string()
 }
 
 /// Returns shell and arguments for executing a command string
 /// - Unix: (shell, ["-c", cmd])
-/// - Windows: (powershell, ["-Command", cmd])
+/// - Windows: (cmd.exe, ["/C", cmd])
 #[cfg(unix)]
 pub fn get_shell_command_args(cmd: &str) -> (String, Vec<String>) {
     let shell = get_default_shell();
@@ -28,8 +29,8 @@ pub fn get_shell_command_args(cmd: &str) -> (String, Vec<String>) {
 #[cfg(windows)]
 pub fn get_shell_command_args(cmd: &str) -> (String, Vec<String>) {
     (
-        "powershell.exe".to_string(),
-        vec!["-Command".to_string(), cmd.to_string()],
+        "cmd.exe".to_string(),
+        vec!["/C".to_string(), cmd.to_string()],
     )
 }
 
@@ -37,6 +38,28 @@ pub fn get_shell_command_args(cmd: &str) -> (String, Vec<String>) {
 pub fn shell_command(cmd: &str) -> Command {
     let (shell, args) = get_shell_command_args(cmd);
     let mut command = Command::new(shell);
+    command.args(args);
+    command
+}
+
+/// Creates a Command to run a CLI executable with arguments
+/// Handles Windows .cmd files properly
+pub fn cli_command(executable: &std::path::Path, args: &[&str]) -> Command {
+    #[cfg(windows)]
+    {
+        // On Windows, .cmd files need to be run through cmd.exe
+        let ext = executable.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("cmd") {
+            let mut command = Command::new("cmd.exe");
+            command.arg("/C");
+            command.arg(executable);
+            command.args(args);
+            return command;
+        }
+    }
+
+    // For regular executables, run directly
+    let mut command = Command::new(executable);
     command.args(args);
     command
 }
@@ -62,7 +85,7 @@ pub fn get_login_shell_args(cmd: &str) -> (String, Vec<String>) {
 #[allow(dead_code)]
 #[cfg(windows)]
 pub fn get_login_shell_args(cmd: &str) -> (String, Vec<String>) {
-    // Windows doesn't have login shell concept, use regular PowerShell
+    // Windows doesn't have login shell concept, use regular cmd.exe
     get_shell_command_args(cmd)
 }
 
@@ -125,6 +148,7 @@ pub fn windows_to_wsl_path(path: &str) -> String {
 /// Create a Command that runs through WSL (Windows only)
 /// Falls back to regular shell command on other platforms
 #[cfg(windows)]
+#[allow(dead_code)]
 pub fn wsl_shell_command(cmd: &str) -> Result<Command, String> {
     if !is_wsl_available() {
         return Err("WSL is required on Windows. Install with: wsl --install".to_string());

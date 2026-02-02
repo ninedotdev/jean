@@ -11,7 +11,9 @@ export function LeftSideBar({ children, className }: LeftSideBarProps) {
     <div
       className={cn('flex h-full flex-col bg-sidebar', className)}
     >
-      <ProjectsSidebar />
+      <div className="flex-1 min-h-0">
+        <ProjectsSidebar />
+      </div>
       {children}
     </div>
   )

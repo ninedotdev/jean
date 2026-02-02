@@ -268,6 +268,7 @@ export interface AppPreferences {
   review_sound: NotificationSound // Sound when session finishes reviewing
   workspace_folder: string // Base folder for worktrees (empty = default ~/jean/)
   default_ai_provider: AiCliProvider // Default AI CLI provider
+  show_usage_status_bar: boolean // Show Claude usage status bar (cost, context, limits)
 }
 
 export type FileEditMode = 'inline' | 'external'
@@ -307,8 +308,15 @@ export const codexModelOptions: { value: CodexModel; label: string }[] = [
   { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex' },
 ]
 
+// Kimi models
+export type KimiModel = 'kimi-code/kimi-for-coding'
+
+export const kimiModelOptions: { value: KimiModel; label: string }[] = [
+  { value: 'kimi-code/kimi-for-coding', label: 'Kimi Code' },
+]
+
 // Union type for all models across providers
-export type AiModel = ClaudeModel | GeminiModel | CodexModel
+export type AiModel = ClaudeModel | GeminiModel | CodexModel | KimiModel
 
 // Helper to get model options for a provider
 export function getModelOptionsForProvider(provider: AiCliProvider): { value: string; label: string }[] {
@@ -319,6 +327,8 @@ export function getModelOptionsForProvider(provider: AiCliProvider): { value: st
       return geminiModelOptions
     case 'codex':
       return codexModelOptions
+    case 'kimi':
+      return kimiModelOptions
     default:
       return claudeModelOptions
   }
@@ -333,18 +343,55 @@ export function getDefaultModelForProvider(provider: AiCliProvider): string {
       return 'gemini-3-flash-preview'
     case 'codex':
       return 'gpt-5.2-codex'
+    case 'kimi':
+      return 'kimi-code/kimi-for-coding'
     default:
       return 'opus'
   }
 }
 
+// Helper to get friendly model label from model value
+export function getModelLabel(model: string, _provider?: AiCliProvider): string {
+  // Try to find in all model options
+  const allOptions = [
+    ...claudeModelOptions,
+    ...geminiModelOptions,
+    ...codexModelOptions,
+    ...kimiModelOptions,
+  ]
+  const found = allOptions.find(o => o.value === model)
+  if (found) return found.label
+
+  // Fallback: capitalize and clean up the model name
+  return model
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// Helper to get friendly provider label
+export function getProviderLabel(provider: AiCliProvider): string {
+  switch (provider) {
+    case 'claude':
+      return 'Claude'
+    case 'gemini':
+      return 'Gemini'
+    case 'codex':
+      return 'Codex'
+    case 'kimi':
+      return 'Kimi'
+    default:
+      return provider
+  }
+}
+
 // AI CLI Provider types
-export type AiCliProvider = 'claude' | 'gemini' | 'codex'
+export type AiCliProvider = 'claude' | 'gemini' | 'codex' | 'kimi'
 
 export const aiProviderOptions: { value: AiCliProvider; label: string; description: string }[] = [
   { value: 'claude', label: 'Anthropic', description: 'Claude Code CLI' },
   { value: 'gemini', label: 'Google', description: 'Gemini CLI' },
   { value: 'codex', label: 'OpenAI', description: 'OpenAI Codex CLI' },
+  { value: 'kimi', label: 'Kimi', description: 'Kimi Code CLI' },
 ]
 
 export const thinkingLevelOptions: { value: ThinkingLevel; label: string }[] = [
@@ -527,4 +574,5 @@ export const defaultPreferences: AppPreferences = {
   review_sound: 'none',
   workspace_folder: '', // Default: empty means ~/jean/
   default_ai_provider: 'claude', // Default: Claude
+  show_usage_status_bar: true, // Default: show usage status bar
 }

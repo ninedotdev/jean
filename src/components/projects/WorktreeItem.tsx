@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
 import { BorderSpinner } from '@/components/ui/border-spinner'
-import { ArrowDown, ArrowUp, Circle, GitBranch, Square } from 'lucide-react'
+import { GoGitBranch } from 'react-icons/go'
+import { ArrowDown, ArrowUp, Circle, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { isBaseSession, type Worktree } from '@/types/projects'
@@ -32,8 +33,7 @@ export function WorktreeItem({
   projectPath,
   defaultBranch,
 }: WorktreeItemProps) {
-  const { selectedWorktreeId, selectWorktree, selectProject } =
-    useProjectsStore()
+  const selectedWorktreeId = useProjectsStore(state => state.selectedWorktreeId)
   // Check if any session in this worktree is running (chat)
   const isChatRunning = useChatStore(state =>
     state.isWorktreeRunning(worktree.id)
@@ -205,9 +205,9 @@ export function WorktreeItem({
   // Determine indicator color: blinking yellow=waiting for user, green=review, grey=idle
   // Running state uses BorderSpinner component instead (handled in render)
   const indicatorColor = useMemo(() => {
-    if (isWaitingQuestion) return 'text-yellow-500 animate-blink shadow-[0_0_6px_currentColor]'
-    if (isWaitingPlan) return 'text-yellow-500 animate-blink shadow-[0_0_6px_currentColor]'
-    if (isReviewing) return 'text-green-500 shadow-[0_0_6px_currentColor]'
+    if (isWaitingQuestion) return 'text-yellow-500 animate-blink shadow-[0_0_4px_currentColor]'
+    if (isWaitingPlan) return 'text-yellow-500 animate-blink shadow-[0_0_4px_currentColor]'
+    if (isReviewing) return 'text-green-500 shadow-[0_0_4px_currentColor]'
     return 'text-muted-foreground/50'
   }, [isWaitingQuestion, isWaitingPlan, isReviewing])
 
@@ -252,6 +252,7 @@ export function WorktreeItem({
   }, [worktree.id, worktree.name])
 
   const handleClick = useCallback(() => {
+    const { selectProject, selectWorktree } = useProjectsStore.getState()
     selectProject(projectId)
     selectWorktree(worktree.id)
     // Also set the active worktree for chat
@@ -273,8 +274,6 @@ export function WorktreeItem({
     defaultBranch,
     worktree.pr_number,
     worktree.pr_url,
-    selectProject,
-    selectWorktree,
   ])
 
   const handleDoubleClick = useCallback(
@@ -341,6 +340,7 @@ export function WorktreeItem({
             description: 'Opening conflict resolution...',
           })
           // Select this worktree and trigger resolve-conflicts via magic command
+          const { selectWorktree } = useProjectsStore.getState()
           selectWorktree(worktree.id)
           // Small delay to ensure worktree is selected before dispatching
           setTimeout(() => {
@@ -355,7 +355,7 @@ export function WorktreeItem({
         clearWorktreeLoading(worktree.id)
       }
     },
-    [worktree.id, worktree.path, defaultBranch, projectId, selectWorktree]
+    [worktree.id, worktree.path, defaultBranch, projectId]
   )
 
   const handlePush = useCallback(
@@ -384,7 +384,7 @@ export function WorktreeItem({
           'group relative flex cursor-pointer items-center gap-1.5 py-1.5 pr-2 transition-colors duration-150',
           isNarrowSidebar ? 'pl-4' : 'pl-7',
           isSelected
-            ? 'bg-primary/10 text-foreground before:absolute before:left-0 before:top-0 before:h-full before:w-[3px] before:bg-primary'
+            ? 'bg-primary/10 text-foreground'
             : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
         )}
         onClick={handleClick}
@@ -394,15 +394,15 @@ export function WorktreeItem({
         {/* Priority: chat running > loading operation > idle states */}
         {(isWaitingQuestion || isWaitingPlan) ? (
           isBase ? (
-            <Circle className={cn('h-2 w-2 shrink-0 fill-current rounded-full', indicatorColor)} />
+            <Circle className={cn('h-2 w-2 shrink-0 fill-current rounded-full shadow-[0_0_8px_currentColor]', indicatorColor)} />
           ) : (
-            <Square className={cn('h-2 w-2 shrink-0 fill-current rounded-sm', indicatorColor)} />
+            <Square className={cn('h-2 w-2 shrink-0 fill-current rounded-sm shadow-[0_0_8px_currentColor]', indicatorColor)} />
           )
         ) : isChatRunning ? (
           <BorderSpinner
             shape={isBase ? 'circle' : 'square'}
             className={cn(
-              'h-2 w-2 shadow-[0_0_6px_currentColor]',
+              'h-2 w-2 shadow-[0_0_4px_currentColor]',
               runningSessionExecutionMode === 'yolo' ? 'text-destructive' : 'text-yellow-500'
             )}
             bgClassName={
@@ -412,7 +412,7 @@ export function WorktreeItem({
         ) : loadingOperation ? (
           <BorderSpinner
             shape={isBase ? 'circle' : 'square'}
-            className="h-2 w-2 shadow-[0_0_6px_currentColor] text-cyan-500"
+            className="h-2 w-2 shadow-[0_0_4px_currentColor] text-cyan-500"
             bgClassName="fill-cyan-500/50"
           />
         ) : isBase ? (
@@ -435,13 +435,19 @@ export function WorktreeItem({
           />
         ) : (
           <span
-            className={cn('flex-1 truncate text-sm', isBase && 'font-medium')}
+            className={cn(
+              'flex min-w-0 flex-1 items-center gap-1 truncate text-sm',
+              isBase && 'font-medium'
+            )}
           >
-            {worktree.name}
+            {!isBase && (
+              <GoGitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+            )}
+            <span className="truncate">{worktree.name}</span>
             {/* Show branch name if different from worktree name */}
             {worktree.branch !== worktree.name && (
               <span className="ml-1 inline-flex items-center gap-0.5 text-xs text-muted-foreground">
-                <GitBranch className="h-2.5 w-2.5" />
+                <GoGitBranch className="h-3 w-3" />
                 {worktree.branch}
               </span>
             )}

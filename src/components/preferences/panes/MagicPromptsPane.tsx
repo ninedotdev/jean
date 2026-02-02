@@ -148,7 +148,8 @@ export const MagicPromptsPane: React.FC = () => {
 
   const currentPrompts = preferences?.magic_prompts ?? DEFAULT_MAGIC_PROMPTS
   const currentModels = preferences?.magic_prompt_models ?? DEFAULT_MAGIC_PROMPT_MODELS
-  const selectedConfig = PROMPT_CONFIGS.find(c => c.key === selectedKey)!
+  const selectedConfig = PROMPT_CONFIGS.find(c => c.key === selectedKey)
+  if (!selectedConfig) return null
   const currentValue = currentPrompts[selectedKey] ?? selectedConfig.defaultValue
   const currentModel = currentModels[selectedConfig.modelKey] ?? selectedConfig.defaultModel
   const isModified = currentValue !== selectedConfig.defaultValue

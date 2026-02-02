@@ -49,7 +49,12 @@ import {
 } from '@/store/chat-store'
 import { usePreferences } from '@/services/preferences'
 import type { AiCliProvider } from '@/types/preferences'
-import { getDefaultModelForProvider } from '@/types/preferences'
+import {
+  getDefaultModelForProvider,
+  getModelLabel,
+  getProviderLabel,
+} from '@/types/preferences'
+import { getProviderFromModel } from '@/utils/model-detection'
 import type {
   ToolCall,
   ThinkingLevel,
@@ -60,13 +65,17 @@ import type {
   PermissionDenial,
   PendingFile,
 } from '@/types/chat'
-import { isAskUserQuestion, isExitPlanMode, isTodoWrite } from '@/types/chat'
+import {
+  isAskUserQuestion,
+  isExitPlanMode,
+  isTodoWrite,
+  type DelegatedTask,
+} from '@/types/chat'
 import { getFilename } from '@/lib/path-utils'
 import { cn } from '@/lib/utils'
 import { PermissionApproval } from './PermissionApproval'
 import { SetupScriptOutput } from './SetupScriptOutput'
 import { SessionTabBar } from './SessionTabBar'
-import { TodoWidget } from './TodoWidget'
 import { normalizeTodosForDisplay } from './tool-call-utils'
 import { ImagePreview } from './ImagePreview'
 import { TextFilePreview } from './TextFilePreview'
@@ -79,6 +88,8 @@ import { ChatToolbar } from './ChatToolbar'
 import { ReviewResultsPanel } from './ReviewResultsPanel'
 import { QueuedMessagesList } from './QueuedMessageItem'
 import { FloatingButtons } from './FloatingButtons'
+import { DelegationAssignmentModal } from './DelegationAssignmentModal'
+import { extractPlanFromToolCalls } from './plan-parser'
 import { StreamingMessage } from './StreamingMessage'
 import { ErrorBanner } from './ErrorBanner'
 import { SessionDigestReminder } from './SessionDigestReminder'
@@ -174,6 +185,10 @@ export function ChatWindow() {
     activeSessionId
       ? (state.manualThinkingOverrides[activeSessionId] ?? false)
       : false
+  )
+  // Delegation progress for showing "Delegating into model..." status
+  const delegationProgress = useChatStore(state =>
+    activeSessionId ? state.delegationProgress[activeSessionId] : undefined
   )
 
   // Terminal panel visibility (per-worktree)
@@ -377,40 +392,23 @@ export function ChatWindow() {
   // Run script for this worktree (used by CMD+R keybinding)
   const { data: runScript } = useRunScript(activeWorktreePath ?? null)
 
-  // Per-session provider selection, falls back to preferences default
+  // Per-session provider selection with intelligent inference
+  // Priority: 1) session.selected_provider, 2) infer from model, 3) preferences default
   const defaultProvider: AiCliProvider =
     (preferences?.default_ai_provider as AiCliProvider) ?? 'claude'
+  const sessionModel = session?.selected_model as string | undefined
   const sessionProvider: AiCliProvider =
-    (session?.selected_provider as AiCliProvider) ?? defaultProvider
+    (session?.selected_provider as AiCliProvider) ??
+    (sessionModel ? getProviderFromModel(sessionModel) : defaultProvider)
 
   // Per-session model selection, falls back to default for current provider
   const defaultModelForSession = getDefaultModelForProvider(sessionProvider)
-  const sessionModel = (session?.selected_model as string) ?? defaultModelForSession
 
-  // Local state for immediate UI updates when user changes provider/model
-  // This avoids showing stale values while waiting for session mutation to complete
-  const [displayProvider, setDisplayProvider] = useState<AiCliProvider>(sessionProvider)
-  const [displayModel, setDisplayModel] = useState<string>(sessionModel)
-
-  // Sync display state ONLY when session ID changes (switching chats)
-  // We intentionally DON'T include sessionProvider/sessionModel in deps because:
-  // 1. User changes provider via dropdown -> setDisplayProvider/setDisplayModel called immediately
-  // 2. Mutation saves to backend -> query invalidated -> sessionProvider/sessionModel update
-  // 3. If we synced here, we'd overwrite display state with potentially stale/partial data
-  // The display state is the source of truth for UI; session data is for persistence
-  const prevSessionIdRef = useRef(activeSessionId)
-  useEffect(() => {
-    // Only sync when switching to a DIFFERENT session
-    if (prevSessionIdRef.current !== activeSessionId) {
-      prevSessionIdRef.current = activeSessionId
-      setDisplayProvider(sessionProvider)
-      setDisplayModel(sessionModel)
-    }
-  }, [activeSessionId, sessionProvider, sessionModel])
-
-  // Use display values for UI, refs for sending messages
-  const selectedProvider = displayProvider
-  const selectedModel = displayModel
+  // Use session data directly - no local display state needed
+  // TanStack Query optimistic updates in mutation handlers provide instant UI feedback
+  // Session data is the single source of truth, preventing sync issues when switching worktrees
+  const selectedProvider = sessionProvider
+  const selectedModel = sessionModel ?? defaultModelForSession
 
   // Per-session thinking level, falls back to preferences default
   const defaultThinkingLevel =
@@ -573,17 +571,15 @@ export function ChatWindow() {
   selectedThinkingLevelRef.current = selectedThinkingLevel
   executionModeRef.current = executionMode
 
-  // Sync provider/model refs ONLY when session ID changes (switching chats)
-  // This ensures we load the stored preferences for the new session
-  // We intentionally don't include selectedProvider/selectedModel in deps because:
-  // - They change AFTER the mutation completes
-  // - But the refs were already set by the change handlers BEFORE the mutation
-  // - If we sync here on every provider/model change, we'd overwrite with stale session data
+  // Sync provider/model refs when:
+  // 1. deferredSessionId changes (switching sessions - after session data loads)
+  // 2. selectedProvider/selectedModel change (optimistic updates or session data refresh)
+  // We use deferredSessionId (not activeSessionId) because session data loads with deferredSessionId.
+  // This prevents race conditions where refs would be set to old session data.
   useEffect(() => {
     selectedProviderRef.current = selectedProvider
     selectedModelRef.current = selectedModel
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId])
+  }, [deferredSessionId, selectedProvider, selectedModel])
 
   // Ref for approve button (passed to VirtualizedMessageList)
   const approveButtonRef = useRef<HTMLButtonElement>(null)
@@ -596,6 +592,7 @@ export function ChatWindow() {
   const {
     scrollViewportRef,
     isAtBottom,
+    isAtTop,
     areFindingsVisible,
     scrollToBottom,
     scrollToFindings,
@@ -609,6 +606,7 @@ export function ChatWindow() {
   // Drag and drop images into chat input
   const { isDragging } = useDragAndDropImages(activeSessionId)
 
+
   // State for file content modal (opened by clicking filenames in tool calls)
   const [viewingFilePath, setViewingFilePath] = useState<string | null>(null)
 
@@ -617,6 +615,72 @@ export function ChatWindow() {
 
   // State for single file diff modal (opened by clicking edited file badges)
   const [editedFilePath, setEditedFilePath] = useState<string | null>(null)
+
+  // Multi-model delegation state
+  const [delegationEnabled, setDelegationEnabled] = useState(false)
+  const [showDelegationModal, setShowDelegationModal] = useState(false)
+  const [pendingPlanContentForDelegation, setPendingPlanContentForDelegation] =
+    useState<string | null>(null)
+  const [pendingDelegationApprovalType, setPendingDelegationApprovalType] =
+    useState<'normal' | 'yolo'>('normal')
+  // Orchestration state (Claude prepares intelligent task grouping)
+  const [delegationManifest, setDelegationManifest] =
+    useState<import('@/types/chat').DelegationManifest | null>(null)
+  const [isGeneratingManifest, setIsGeneratingManifest] = useState(false)
+
+  // Generate orchestration manifest when delegation modal opens
+  useEffect(() => {
+    if (
+      showDelegationModal &&
+      pendingPlanContentForDelegation &&
+      activeSessionId &&
+      activeWorktreeId &&
+      activeWorktreePath &&
+      !delegationManifest &&
+      !isGeneratingManifest
+    ) {
+      const generateManifest = async () => {
+        setIsGeneratingManifest(true)
+        try {
+          const { generateDelegationManifest } = await import('@/services/chat')
+          const manifest = await generateDelegationManifest(
+            activeSessionId,
+            activeWorktreeId,
+            activeWorktreePath,
+            pendingPlanContentForDelegation,
+            session?.messages ?? []
+          )
+          setDelegationManifest(manifest)
+        } catch (error) {
+          console.error('Failed to generate delegation manifest', error)
+          // Continue without manifest - modal will use simple mode
+        } finally {
+          setIsGeneratingManifest(false)
+        }
+      }
+      generateManifest()
+    }
+  }, [
+    showDelegationModal,
+    pendingPlanContentForDelegation,
+    activeSessionId,
+    activeWorktreeId,
+    activeWorktreePath,
+    delegationManifest,
+    isGeneratingManifest,
+    session?.messages,
+  ])
+
+  // Clear manifest when modal closes
+  useEffect(() => {
+    if (!showDelegationModal) {
+      setDelegationManifest(null)
+    }
+  }, [showDelegationModal])
+
+  const handleToggleDelegation = useCallback(() => {
+    setDelegationEnabled(prev => !prev)
+  }, [])
 
   // Track which message's todos were dismissed (by message ID)
   // Special value '__streaming__' means dismissed during streaming (before message ID assigned)
@@ -780,6 +844,16 @@ export function ChatWindow() {
     window.addEventListener('open-git-diff', handleOpenGitDiff)
     return () => window.removeEventListener('open-git-diff', handleOpenGitDiff)
   }, [activeWorktreePath, gitStatus?.base_branch])
+
+  // Listen for file diff request from GitChangesPanel in RightSideBar
+  useEffect(() => {
+    const handleOpenFileDiff = (e: CustomEvent<{ filePath: string }>) => {
+      setEditedFilePath(e.detail.filePath)
+    }
+
+    window.addEventListener('open-file-diff', handleOpenFileDiff)
+    return () => window.removeEventListener('open-file-diff', handleOpenFileDiff)
+  }, [])
 
   // Listen for global run command from keybinding (CMD+R by default)
   useEffect(() => {
@@ -1213,10 +1287,6 @@ export function ChatWindow() {
       const newDefaultModel = getDefaultModelForProvider(provider)
       selectedModelRef.current = newDefaultModel
 
-      // Update display state immediately for UI
-      setDisplayProvider(provider)
-      setDisplayModel(newDefaultModel)
-
       // Gemini and Codex don't support plan mode well - auto-switch to build if currently in plan
       // Gemini CLI only has YOLO mode, Codex keeps asking questions instead of implementing
       if ((provider === 'gemini' || provider === 'codex') && executionModeRef.current === 'plan') {
@@ -1227,6 +1297,7 @@ export function ChatWindow() {
       }
 
       // Save provider AND model to session (per-session persistence)
+      // The mutation includes optimistic updates for instant UI feedback
       if (activeSessionId && activeWorktreeId && activeWorktreePath) {
         setSessionModel.mutate({
           sessionId: activeSessionId,
@@ -1242,17 +1313,22 @@ export function ChatWindow() {
 
   const handleToolbarModelChange = useCallback(
     (model: string) => {
-      // Update ref immediately for next message send
+      // Infer provider from model to keep them in sync
+      const inferredProvider = getProviderFromModel(model)
+
+      // Update refs immediately for next message send
       selectedModelRef.current = model
+      selectedProviderRef.current = inferredProvider
 
-      // Update display state immediately for UI
-      setDisplayModel(model)
-
+      // Save BOTH provider and model to session (per-session persistence)
+      // This prevents provider/model mismatch where provider=null but model has a value
+      // The mutation includes optimistic updates for instant UI feedback
       if (activeSessionId && activeWorktreeId && activeWorktreePath) {
         setSessionModel.mutate({
           sessionId: activeSessionId,
           worktreeId: activeWorktreeId,
           worktreePath: activeWorktreePath,
+          provider: inferredProvider,
           model,
         })
       }
@@ -1630,17 +1706,304 @@ Begin your investigation now.`
     pendingPlanMessage,
   })
 
+  // Wrapper handlers for plan approval that check for delegation
+  const handlePlanApprovalWithDelegation = useCallback(
+    (messageId: string) => {
+      if (delegationEnabled) {
+        // Find the message and extract plan content
+        const message = session?.messages?.find(m => m.id === messageId)
+        if (message?.tool_calls) {
+          const planContent = extractPlanFromToolCalls(message.tool_calls)
+          if (planContent) {
+            setPendingPlanContentForDelegation(planContent)
+            setPendingDelegationApprovalType('normal')
+            setShowDelegationModal(true)
+            return
+          }
+        }
+      }
+      // No delegation or no plan content - proceed normally
+      handlePlanApproval(messageId)
+    },
+    [delegationEnabled, session?.messages, handlePlanApproval]
+  )
+
+  const handlePlanApprovalYoloWithDelegation = useCallback(
+    (messageId: string) => {
+      if (delegationEnabled) {
+        const message = session?.messages?.find(m => m.id === messageId)
+        if (message?.tool_calls) {
+          const planContent = extractPlanFromToolCalls(message.tool_calls)
+          if (planContent) {
+            setPendingPlanContentForDelegation(planContent)
+            setPendingDelegationApprovalType('yolo')
+            setShowDelegationModal(true)
+            return
+          }
+        }
+      }
+      handlePlanApprovalYolo(messageId)
+    },
+    [delegationEnabled, session?.messages, handlePlanApprovalYolo]
+  )
+
+  const handleStreamingPlanApprovalWithDelegation = useCallback(() => {
+    if (delegationEnabled) {
+      // Extract plan from streaming content or tool calls
+      const planContent =
+        extractPlanFromToolCalls(currentToolCalls) || streamingContent
+      if (planContent) {
+        setPendingPlanContentForDelegation(planContent)
+        setPendingDelegationApprovalType('normal')
+        setShowDelegationModal(true)
+        return
+      }
+    }
+    handleStreamingPlanApproval()
+  }, [
+    delegationEnabled,
+    currentToolCalls,
+    streamingContent,
+    handleStreamingPlanApproval,
+  ])
+
+  const handleStreamingPlanApprovalYoloWithDelegation = useCallback(() => {
+    if (delegationEnabled) {
+      const planContent =
+        extractPlanFromToolCalls(currentToolCalls) || streamingContent
+      if (planContent) {
+        setPendingPlanContentForDelegation(planContent)
+        setPendingDelegationApprovalType('yolo')
+        setShowDelegationModal(true)
+        return
+      }
+    }
+    handleStreamingPlanApprovalYolo()
+  }, [
+    delegationEnabled,
+    currentToolCalls,
+    streamingContent,
+    handleStreamingPlanApprovalYolo,
+  ])
+
+  // Handler when user confirms delegation assignments
+  const handleDelegatedApproval = useCallback(
+    async (tasks: DelegatedTask[]) => {
+      if (!activeSessionId || !activeWorktreeId || !activeWorktreePath) return
+
+      // Store delegated tasks in store
+      const {
+        setDelegatedTasks,
+        setStreamingPlanApproved,
+        setExecutionMode: setMode,
+        setSessionReviewing,
+        setWaitingForInput,
+        clearToolCalls,
+        clearStreamingContentBlocks,
+        setExecutingMode,
+        addSendingSession,
+        removeSendingSession,
+      } = useChatStore.getState()
+
+      setDelegatedTasks(activeSessionId, tasks)
+
+      // Close modal
+      setShowDelegationModal(false)
+      setPendingPlanContentForDelegation(null)
+
+      // Update UI state
+      setStreamingPlanApproved(activeSessionId, true)
+      clearToolCalls(activeSessionId)
+      clearStreamingContentBlocks(activeSessionId)
+      setSessionReviewing(activeSessionId, false)
+      setWaitingForInput(activeSessionId, false)
+
+      const isYolo = pendingDelegationApprovalType === 'yolo'
+      setMode(activeSessionId, isYolo ? 'yolo' : 'build')
+      setExecutingMode(activeSessionId, isYolo ? 'yolo' : 'build')
+      addSendingSession(activeSessionId)
+
+      // Show toast for delegation progress
+      const toastId = toast.loading(
+        `Executing ${tasks.length} delegated tasks...`
+      )
+
+      try {
+        // Import and call the delegation function
+        const { executeDelegatedTasks } = await import('@/services/chat')
+        const results = await executeDelegatedTasks(
+          activeSessionId,
+          activeWorktreeId,
+          activeWorktreePath,
+          tasks,
+          isYolo ? 'yolo' : 'build',
+          selectedThinkingLevel
+        )
+
+        // Update tasks in store with results
+        setDelegatedTasks(activeSessionId, results)
+
+        const completedCount = results.filter(
+          t => t.status === 'completed'
+        ).length
+        const failedCount = results.filter(t => t.status === 'failed').length
+
+        if (failedCount > 0) {
+          toast.warning(
+            `Delegation completed: ${completedCount}/${tasks.length} tasks succeeded`,
+            { id: toastId }
+          )
+        } else {
+          toast.success(`All ${completedCount} tasks completed successfully`, {
+            id: toastId,
+          })
+        }
+
+        // Invalidate session to refresh messages
+        queryClient.invalidateQueries({
+          queryKey: ['session', activeSessionId],
+        })
+      } catch (error) {
+        toast.error(`Delegation failed: ${error}`, { id: toastId })
+      } finally {
+        removeSendingSession(activeSessionId)
+        inputRef.current?.focus()
+      }
+    },
+    [
+      activeSessionId,
+      activeWorktreeId,
+      activeWorktreePath,
+      selectedThinkingLevel,
+      pendingDelegationApprovalType,
+      queryClient,
+      inputRef,
+    ]
+  )
+
+  // Handler for orchestrated delegation (when Claude prepares intelligent task grouping)
+  const handleOrchestratedApproval = useCallback(
+    async (
+      manifest: import('@/types/chat').DelegationManifest,
+      assignments: import('@/types/chat').TaskAssignment[]
+    ) => {
+      if (!activeSessionId || !activeWorktreeId || !activeWorktreePath) return
+
+      const {
+        setDelegatedTasks,
+        setStreamingPlanApproved,
+        setExecutionMode: setMode,
+        setSessionReviewing,
+        setWaitingForInput,
+        clearToolCalls,
+        clearStreamingContentBlocks,
+        setExecutingMode,
+        addSendingSession,
+        removeSendingSession,
+      } = useChatStore.getState()
+
+      // Set initial task status for UI from manifest tasks
+      const initialTasks = manifest.tasks.map(t => {
+        const assignment = assignments.find(a => a.taskId === t.id)
+        return {
+          id: t.id,
+          description: t.originalDescription,
+          assignedProvider: (assignment?.provider ||
+            t.recommendedProvider) as import('@/types/preferences').AiCliProvider,
+          assignedModel: assignment?.model || t.recommendedModel,
+          status: 'pending' as const,
+        }
+      })
+      setDelegatedTasks(activeSessionId, initialTasks)
+
+      // Close modal and clear state
+      setShowDelegationModal(false)
+      setPendingPlanContentForDelegation(null)
+      setDelegationManifest(null)
+
+      // Update UI state
+      setStreamingPlanApproved(activeSessionId, true)
+      clearToolCalls(activeSessionId)
+      clearStreamingContentBlocks(activeSessionId)
+      setSessionReviewing(activeSessionId, false)
+      setWaitingForInput(activeSessionId, false)
+
+      const isYolo = pendingDelegationApprovalType === 'yolo'
+      setMode(activeSessionId, isYolo ? 'yolo' : 'build')
+      setExecutingMode(activeSessionId, isYolo ? 'yolo' : 'build')
+      addSendingSession(activeSessionId)
+
+      // Show toast for delegation progress
+      const toastId = toast.loading(
+        `Executing ${manifest.tasks.length} orchestrated tasks (max 2 concurrent)...`
+      )
+
+      try {
+        // Import and call the orchestrated execution function
+        const { executeOrchestratedTasks } = await import('@/services/chat')
+        const results = await executeOrchestratedTasks(
+          activeSessionId,
+          activeWorktreeId,
+          activeWorktreePath,
+          manifest,
+          assignments,
+          isYolo ? 'yolo' : 'build',
+          selectedThinkingLevel
+        )
+
+        // Update tasks in store with results
+        setDelegatedTasks(activeSessionId, results)
+
+        const completedCount = results.filter(
+          t => t.status === 'completed'
+        ).length
+        const failedCount = results.filter(t => t.status === 'failed').length
+
+        if (failedCount > 0) {
+          toast.warning(
+            `Orchestration completed: ${completedCount}/${manifest.tasks.length} tasks succeeded`,
+            { id: toastId }
+          )
+        } else {
+          toast.success(
+            `All ${completedCount} orchestrated tasks completed successfully`,
+            { id: toastId }
+          )
+        }
+
+        // Invalidate session to refresh messages
+        queryClient.invalidateQueries({
+          queryKey: ['session', activeSessionId],
+        })
+      } catch (error) {
+        toast.error(`Orchestration failed: ${error}`, { id: toastId })
+      } finally {
+        removeSendingSession(activeSessionId)
+        inputRef.current?.focus()
+      }
+    },
+    [
+      activeSessionId,
+      activeWorktreeId,
+      activeWorktreePath,
+      selectedThinkingLevel,
+      pendingDelegationApprovalType,
+      queryClient,
+      inputRef,
+    ]
+  )
+
   // Listen for approve-plan keyboard shortcut event
   useEffect(() => {
     const handleApprovePlanEvent = () => {
       // Check if we have a streaming plan to approve
       if (hasStreamingPlan) {
-        handleStreamingPlanApproval()
+        handleStreamingPlanApprovalWithDelegation()
         return
       }
       // Check if we have a pending (non-streaming) plan to approve
       if (pendingPlanMessage) {
-        handlePlanApproval(pendingPlanMessage.id)
+        handlePlanApprovalWithDelegation(pendingPlanMessage.id)
       }
     }
 
@@ -1650,8 +2013,8 @@ Begin your investigation now.`
   }, [
     hasStreamingPlan,
     pendingPlanMessage,
-    handleStreamingPlanApproval,
-    handlePlanApproval,
+    handleStreamingPlanApprovalWithDelegation,
+    handlePlanApprovalWithDelegation,
   ])
 
   // Listen for review-fix-message events from ReviewResultsPanel
@@ -1932,8 +2295,15 @@ Begin your investigation now.`
               minSize={30}
             >
               <div className="relative flex h-full flex-col">
-                {/* Messages area - with padding at bottom for floating input */}
-                <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden pb-32">
+                {/* Messages area */}
+                <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+                  {/* Top fade overlay - shows when there's content above */}
+                  <div
+                    className={cn(
+                      'pointer-events-none absolute inset-x-0 top-0 z-10 h-16 bg-gradient-to-b from-background to-transparent transition-opacity duration-300',
+                      isAtTop ? 'opacity-0' : 'opacity-100'
+                    )}
+                  />
                   {/* Session digest reminder (shows when opening a session that had activity while out of focus) */}
                   {activeSessionId && (
                     <SessionDigestReminder sessionId={activeSessionId} />
@@ -1943,7 +2313,7 @@ Begin your investigation now.`
                     viewportRef={scrollViewportRef}
                     onScroll={handleScroll}
                   >
-                    <div className="mx-auto max-w-7xl px-4 py-4 md:px-6 min-w-0 w-full">
+                    <div className="mx-auto max-w-7xl px-4 py-4 pb-36 md:px-6 min-w-0 w-full">
                       <div className="select-text space-y-4 font-mono text-sm min-w-0 break-words overflow-x-auto">
                         {/* Debug info (dev mode only) */}
                         {isDev && activeWorktreeId && activeWorktreePath && activeSessionId && (
@@ -1989,8 +2359,8 @@ Begin your investigation now.`
                             approveShortcut={approveShortcut}
                             approveButtonRef={approveButtonRef}
                             isSending={isSending}
-                            onPlanApproval={handlePlanApproval}
-                            onPlanApprovalYolo={handlePlanApprovalYolo}
+                            onPlanApproval={handlePlanApprovalWithDelegation}
+                            onPlanApprovalYolo={handlePlanApprovalYoloWithDelegation}
                             onQuestionAnswer={handleQuestionAnswer}
                             onQuestionSkip={handleSkipQuestion}
                             onFileClick={setViewingFilePath}
@@ -2025,10 +2395,10 @@ Begin your investigation now.`
                             areQuestionsSkipped={areQuestionsSkipped}
                             isStreamingPlanApproved={isStreamingPlanApproved}
                             onStreamingPlanApproval={
-                              handleStreamingPlanApproval
+                              handleStreamingPlanApprovalWithDelegation
                             }
                             onStreamingPlanApprovalYolo={
-                              handleStreamingPlanApprovalYolo
+                              handleStreamingPlanApprovalYoloWithDelegation
                             }
                           />
                         )}
@@ -2083,73 +2453,77 @@ Begin your investigation now.`
                   />
                 )}
 
-                {/* Input container */}
+                {/* Input container - pointer-events-none so clicks pass through to scroll area */}
                 <div className="absolute bottom-0 left-0 right-0 px-4 pb-4 md:px-6 pointer-events-none">
-                  <div className="mx-auto max-w-4xl pointer-events-auto">
-                    {/* Pending file preview (@ mentions) */}
-                    <FilePreview
-                      files={currentPendingFiles}
-                      onRemove={handleRemovePendingFile}
-                      disabled={isSending}
-                    />
+                  <div className="mx-auto max-w-3xl">
+                    {/* Previews container - enable pointer events only for interactive elements */}
+                    <div className="pointer-events-auto">
+                      {/* Pending file preview (@ mentions) */}
+                      <FilePreview
+                        files={currentPendingFiles}
+                        onRemove={handleRemovePendingFile}
+                        disabled={isSending}
+                      />
 
-                    {/* Pending image preview */}
-                    <ImagePreview
-                      images={currentPendingImages}
-                      onRemove={handleRemovePendingImage}
-                      disabled={isSending}
-                    />
+                      {/* Pending image preview */}
+                      <ImagePreview
+                        images={currentPendingImages}
+                        onRemove={handleRemovePendingImage}
+                        disabled={isSending}
+                      />
 
-                    {/* Pending text file preview */}
-                    <TextFilePreview
-                      textFiles={currentPendingTextFiles}
-                      onRemove={handleRemovePendingTextFile}
-                      disabled={isSending}
-                    />
+                      {/* Pending text file preview */}
+                      <TextFilePreview
+                        textFiles={currentPendingTextFiles}
+                        onRemove={handleRemovePendingTextFile}
+                        disabled={isSending}
+                      />
 
-                    {/* Pending skills preview */}
-                    {currentPendingSkills.length > 0 && (
-                      <div className="px-4 md:px-6 pt-2 flex flex-wrap gap-2">
-                        {currentPendingSkills.map(skill => (
-                          <SkillBadge
-                            key={skill.id}
-                            skill={skill}
-                            onRemove={() => handleRemovePendingSkill(skill.id)}
-                          />
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Task widget - shows current session's active todos */}
-                    {/* Show if: has todos AND (no dismissal OR source differs from dismissed message) */}
-                    {activeTodos.length > 0 &&
-                      (dismissedTodoMessageId === null ||
-                        (todoSourceMessageId !== null &&
-                          todoSourceMessageId !== dismissedTodoMessageId)) && (
-                        <div className="px-4 md:px-6 pt-2">
-                          <TodoWidget
-                            todos={normalizeTodosForDisplay(
-                              activeTodos,
-                              isFromStreaming
-                            )}
-                            isStreaming={isSending}
-                            onClose={() =>
-                              setDismissedTodoMessageId(
-                                todoSourceMessageId ?? '__streaming__'
-                              )
-                            }
-                          />
+                      {/* Pending skills preview */}
+                      {currentPendingSkills.length > 0 && (
+                        <div className="px-4 md:px-6 pt-2 flex flex-wrap gap-2">
+                          {currentPendingSkills.map(skill => (
+                            <SkillBadge
+                              key={skill.id}
+                              skill={skill}
+                              onRemove={() => handleRemovePendingSkill(skill.id)}
+                            />
+                          ))}
                         </div>
                       )}
+                    </div>
+
+                    {/* Delegation status indicator - shows when delegation is actively running */}
+                    {delegationProgress && (
+                      <div className="pointer-events-auto mb-2 flex justify-center">
+                        <div className="inline-flex items-center gap-2 py-1.5 px-3 rounded-full bg-green-500/10 border border-green-500/30">
+                          <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                          <span className="text-xs text-green-600 dark:text-green-400 font-medium">
+                            Delegating into {getProviderLabel(delegationProgress.currentProvider as AiCliProvider)}
+                            {delegationProgress.currentModel && (
+                              <span className="text-green-500/70 ml-1">
+                                {getModelLabel(delegationProgress.currentModel)}
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-xs text-green-500/50">
+                            {(delegationProgress.currentTaskIndex ?? 0) + 1}/{delegationProgress.totalTasks}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Input area - floating container with textarea and toolbar */}
                     <form
                       ref={formRef}
                       onSubmit={handleSubmit}
                       className={cn(
-                        'pointer-events-auto relative rounded-2xl border border-border/50 bg-background shadow-lg transition-all duration-150',
+                        'pointer-events-auto relative rounded-2xl border bg-background shadow-lg transition-all duration-150',
                         isDragging &&
-                          'ring-2 ring-primary ring-inset bg-primary/5'
+                          'ring-2 ring-primary ring-inset bg-primary/5',
+                        delegationEnabled
+                          ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
+                          : 'border-border/50'
                       )}
                     >
                       {/* Textarea section */}
@@ -2221,6 +2595,20 @@ Begin your investigation now.`
                         onThinkingLevelChange={handleToolbarThinkingLevelChange}
                         onSetExecutionMode={handleToolbarSetExecutionMode}
                         onCancel={handleCancel}
+                        delegationEnabled={delegationEnabled}
+                        onToggleDelegation={handleToggleDelegation}
+                        activeSessionId={activeSessionId}
+                        activeTodos={
+                          activeTodos.length > 0 &&
+                          (dismissedTodoMessageId === null ||
+                            (todoSourceMessageId !== null &&
+                              todoSourceMessageId !== dismissedTodoMessageId))
+                            ? normalizeTodosForDisplay(activeTodos, isFromStreaming)
+                            : undefined
+                        }
+                        onDismissTodos={() =>
+                          setDismissedTodoMessageId(todoSourceMessageId ?? '__streaming__')
+                        }
                       />
                     </form>
                   </div>
@@ -2280,6 +2668,21 @@ Begin your investigation now.`
           worktreePath={activeWorktreePath ?? null}
           activeSessionId={activeSessionId ?? null}
           projectName={worktree?.name ?? 'unknown-project'}
+        />
+
+        {/* Delegation assignment modal for multi-model task delegation */}
+        <DelegationAssignmentModal
+          open={showDelegationModal}
+          onOpenChange={setShowDelegationModal}
+          planContent={pendingPlanContentForDelegation ?? ''}
+          defaultProvider={selectedProvider}
+          defaultModel={selectedModel}
+          manifest={delegationManifest}
+          isGeneratingManifest={isGeneratingManifest}
+          onApprove={handleDelegatedApproval}
+          onApproveYolo={handleDelegatedApproval}
+          onApproveOrchestrated={handleOrchestratedApproval}
+          onApproveOrchestratedYolo={handleOrchestratedApproval}
         />
 
         {/* Merge options dialog */}

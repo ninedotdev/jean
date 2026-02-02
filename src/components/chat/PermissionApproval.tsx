@@ -133,11 +133,13 @@ export function PermissionApproval({
 
     for (let i = 0; i < denials.length; i++) {
       let shouldKeep = true
-      const itemI = innerContent[i]!
+      const itemI = innerContent[i]
+      if (!itemI) continue
 
       for (let j = 0; j < denials.length; j++) {
         if (i === j) continue
-        const itemJ = innerContent[j]!
+        const itemJ = innerContent[j]
+        if (!itemJ) continue
 
         // Only compare containment for same tool type
         if (itemI.tool === itemJ.tool) {

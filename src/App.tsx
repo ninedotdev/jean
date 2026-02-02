@@ -20,6 +20,7 @@ import { useImmediateSessionStateSave } from './hooks/useImmediateSessionStateSa
 import { useCliVersionCheck } from './hooks/useCliVersionCheck'
 import { useQueueProcessor } from './hooks/useQueueProcessor'
 import useStreamingEvents from './components/chat/hooks/useStreamingEvents'
+import { useDelegationEvents } from './hooks/useDelegationEvents'
 import { preloadAllSounds } from './lib/sounds'
 
 function App() {
@@ -40,6 +41,9 @@ function App() {
   // Global queue processor - must be at App level so queued messages execute
   // even when the worktree is not focused (ChatWindow unmounted)
   useQueueProcessor()
+
+  // Global delegation event listeners - tracks multi-model task progress
+  useDelegationEvents()
 
   // Check CLI installation status
   const { data: claudeStatus, isLoading: isClaudeStatusLoading } =
@@ -66,6 +70,7 @@ function App() {
       // Best-effort sync cleanup for refresh scenarios
       // Note: async operations may not complete, but Rust-side RunEvent::Exit
       // will handle proper cleanup on app quit
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
       invoke('kill_all_terminals').catch(() => {})
     }
     window.addEventListener('beforeunload', handleBeforeUnload)

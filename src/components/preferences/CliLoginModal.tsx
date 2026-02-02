@@ -57,11 +57,16 @@ function CliLoginModalContent({ cliType, command, onClose }: CliLoginModalConten
 
   console.log('[CliLoginModal] Render - terminalId:', terminalId, 'command:', command)
 
+  // Determine a valid working directory for the current platform
+  // CLI commands don't depend on cwd, we just need a valid directory
+  const isWindows = typeof navigator !== 'undefined' && navigator.platform.includes('Win')
+  const worktreePath = isWindows ? 'C:\\Windows\\Temp' : '/tmp'
+
   // Use a synthetic worktreeId for CLI login (not associated with any real worktree)
   const { initTerminal, fit } = useTerminal({
     terminalId,
     worktreeId: 'cli-login', // Synthetic worktreeId for CLI login terminals
-    worktreePath: '/tmp', // CLI commands don't depend on cwd
+    worktreePath, // Platform-specific temp directory
     command,
   })
 

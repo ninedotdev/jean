@@ -465,9 +465,11 @@ pub fn parse_run_to_message(lines: &[String], run: &RunEntry) -> Result<ChatMess
         }
 
         let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let msg_role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
 
         match msg_type {
             "assistant" => {
+                // Claude CLI format: {"type": "assistant", "message": {"content": [...]}}
                 if let Some(message) = msg.get("message") {
                     if let Some(blocks) = message.get("content").and_then(|c| c.as_array()) {
                         for block in blocks {
@@ -529,8 +531,86 @@ pub fn parse_run_to_message(lines: &[String], run: &RunEntry) -> Result<ChatMess
                     }
                 }
             }
+            // Codex CLI format: {"type": "item.completed", "item": {...}}
+            "item.completed" => {
+                if let Some(item) = msg.get("item") {
+                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                    match item_type {
+                        "agent_message" => {
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                if !text.is_empty() {
+                                    content.push_str(text);
+                                    content.push('\n');
+                                    content_blocks.push(ContentBlock::Text {
+                                        text: text.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        "reasoning" => {
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                content_blocks.push(ContentBlock::Thinking {
+                                    thinking: text.to_string(),
+                                });
+                            }
+                        }
+                        "command_execution" => {
+                            let command = item.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                            let output_text = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                            let tool_id = item
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            tool_calls.push(ToolCall {
+                                id: tool_id.clone(),
+                                name: "Bash".to_string(),
+                                input: serde_json::json!({ "command": command }),
+                                output: Some(output_text.to_string()),
+                                parent_tool_use_id: None,
+                            });
+                            content_blocks.push(ContentBlock::ToolUse { tool_call_id: tool_id });
+                        }
+                        "file_change" => {
+                            let file_path = item.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+                            let change_type = item.get("change_type").and_then(|v| v.as_str()).unwrap_or("edit");
+                            let tool_id = item
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            let tool_name = match change_type {
+                                "create" => "Write",
+                                "delete" => "Bash",
+                                _ => "Edit",
+                            };
+
+                            tool_calls.push(ToolCall {
+                                id: tool_id.clone(),
+                                name: tool_name.to_string(),
+                                input: serde_json::json!({ "file_path": file_path }),
+                                output: None,
+                                parent_tool_use_id: None,
+                            });
+                            content_blocks.push(ContentBlock::ToolUse { tool_call_id: tool_id });
+                        }
+                        _ => {
+                            // Try to extract text from unknown item types
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                if !text.is_empty() {
+                                    content.push_str(text);
+                                    content.push('\n');
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             "user" => {
-                // User messages contain tool results
+                // User messages contain tool results (Claude format)
                 if let Some(message) = msg.get("message") {
                     if let Some(blocks) = message.get("content").and_then(|c| c.as_array()) {
                         for block in blocks {
@@ -562,7 +642,116 @@ pub fn parse_run_to_message(lines: &[String], run: &RunEntry) -> Result<ChatMess
                     }
                 }
             }
-            _ => {}
+            _ => {
+                // Kimi CLI format: {"role": "assistant", "content": [...] or "content": "string", "tool_calls": [...]}
+                // Has no "type" field, uses "role" instead
+                // Content can be a string (no-thinking mode) or an array (thinking mode)
+                if msg_role == "assistant" {
+                    // Check if content is a simple string (--no-thinking mode)
+                    if let Some(content_str) = msg.get("content").and_then(|c| c.as_str()) {
+                        if !content_str.is_empty() {
+                            content.push_str(content_str);
+                            content.push('\n');
+                            content_blocks.push(ContentBlock::Text {
+                                text: content_str.to_string(),
+                            });
+                        }
+                    } else if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
+                        // Process content array (thinking mode)
+                        for block in blocks {
+                            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                            match block_type {
+                                "text" => {
+                                    if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                        if !text.is_empty() {
+                                            content.push_str(text);
+                                            content.push('\n');
+                                            content_blocks.push(ContentBlock::Text {
+                                                text: text.to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                                "think" => {
+                                    if let Some(think_text) = block.get("think").and_then(|v| v.as_str()) {
+                                        if !think_text.is_empty() {
+                                            content_blocks.push(ContentBlock::Thinking {
+                                                thinking: think_text.to_string(),
+                                            });
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Process tool_calls array (Kimi format)
+                    if let Some(tool_calls_arr) = msg.get("tool_calls").and_then(|v| v.as_array()) {
+                        for tool_call in tool_calls_arr {
+                            let tool_id = tool_call
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            if let Some(function) = tool_call.get("function") {
+                                let tool_name = function
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+
+                                let arguments = function
+                                    .get("arguments")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("{}");
+
+                                let input: serde_json::Value =
+                                    serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+
+                                // Map Kimi tool names to standard names
+                                let mapped_name = match tool_name.as_str() {
+                                    "WriteFile" | "CreateFile" => "Write",
+                                    "ReadFile" => "Read",
+                                    "EditFile" | "PatchFile" => "Edit",
+                                    "RunCommand" | "Bash" | "Shell" => "Bash",
+                                    "ListDirectory" | "ListDir" => "Bash",
+                                    "DeleteFile" => "Bash",
+                                    "SearchFiles" | "GlobTool" => "Glob",
+                                    "GrepTool" | "SearchContent" => "Grep",
+                                    _ => &tool_name,
+                                };
+
+                                tool_calls.push(ToolCall {
+                                    id: tool_id.clone(),
+                                    name: mapped_name.to_string(),
+                                    input,
+                                    output: None,
+                                    parent_tool_use_id: None,
+                                });
+                                content_blocks.push(ContentBlock::ToolUse { tool_call_id: tool_id });
+                            }
+                        }
+                    }
+                } else if msg_role == "tool" {
+                    // Kimi tool result format: {"role": "tool", "content": "...", "tool_call_id": "..."}
+                    let tool_id = msg
+                        .get("tool_call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let output = msg
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    // Update matching tool call's output
+                    if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
+                        tc.output = Some(output.to_string());
+                    }
+                }
+            }
         }
     }
 

@@ -16,13 +16,27 @@ import {
   type PermissionDenial,
   type ExecutionMode,
   type SessionDigest,
+  type DelegatedTask,
   EXECUTION_MODE_CYCLE,
   isExitPlanMode,
 } from '@/types/chat'
+import type { AiCliProvider } from '@/types/preferences'
 import type { ReviewResponse } from '@/types/projects'
 
 /** Available Claude models */
 export type ClaudeModel = 'sonnet' | 'opus' | 'haiku'
+
+/** Real-time progress tracking for multi-model delegation */
+export interface DelegationProgress {
+  currentTaskIndex: number
+  totalTasks: number
+  currentTaskId: string
+  currentProvider?: string
+  currentModel?: string
+  output: string
+  completedOutput?: string
+  error?: string
+}
 
 /** Default model to use when none is selected (fallback only - preferences take priority) */
 export const DEFAULT_MODEL: ClaudeModel = 'opus'
@@ -165,6 +179,12 @@ interface ChatUIState {
 
   // Worktree loading operations (commit, pr, review, merge, pull)
   worktreeLoadingOperations: Record<string, string | null>
+
+  // Multi-model delegation: tasks assigned to different providers per session
+  delegatedTasks: Record<string, DelegatedTask[]>
+
+  // Multi-model delegation: real-time progress tracking per session
+  delegationProgress: Record<string, DelegationProgress>
 
   // Actions - Session management
   setActiveSession: (worktreeId: string, sessionId: string) => void
@@ -383,6 +403,32 @@ interface ChatUIState {
   clearWorktreeLoading: (worktreeId: string) => void
   getWorktreeLoadingOperation: (worktreeId: string) => string | null
 
+  // Actions - Multi-model delegation
+  setDelegatedTasks: (sessionId: string, tasks: DelegatedTask[]) => void
+  updateDelegatedTaskStatus: (
+    sessionId: string,
+    taskId: string,
+    status: DelegatedTask['status'],
+    error?: string
+  ) => void
+  updateDelegatedTaskAssignment: (
+    sessionId: string,
+    taskId: string,
+    provider: AiCliProvider,
+    model: string
+  ) => void
+  getDelegatedTasks: (sessionId: string) => DelegatedTask[]
+  clearDelegatedTasks: (sessionId: string) => void
+
+  // Actions - Delegation progress tracking
+  setCurrentDelegationProgress: (
+    sessionId: string,
+    progress: Partial<DelegationProgress>
+  ) => void
+  appendDelegationOutput: (sessionId: string, content: string) => void
+  clearDelegationProgress: (sessionId: string) => void
+  getDelegationProgress: (sessionId: string) => DelegationProgress | undefined
+
   // Legacy actions (deprecated - for backward compatibility)
   /** @deprecated Use addSendingSession instead */
   addSendingWorktree: (worktreeId: string) => void
@@ -437,6 +483,8 @@ export const useChatStore = create<ChatUIState>()(
       pendingDigestSessionIds: {},
       sessionDigests: {},
       worktreeLoadingOperations: {},
+      delegatedTasks: {},
+      delegationProgress: {},
 
       // Session management
       setActiveSession: (worktreeId, sessionId) =>
@@ -1631,6 +1679,122 @@ export const useChatStore = create<ChatUIState>()(
 
       getWorktreeLoadingOperation: worktreeId =>
         get().worktreeLoadingOperations[worktreeId] ?? null,
+
+      // Multi-model delegation
+      setDelegatedTasks: (sessionId, tasks) =>
+        set(
+          state => ({
+            delegatedTasks: {
+              ...state.delegatedTasks,
+              [sessionId]: tasks,
+            },
+          }),
+          undefined,
+          'setDelegatedTasks'
+        ),
+
+      updateDelegatedTaskStatus: (sessionId, taskId, status, error) =>
+        set(
+          state => {
+            const tasks = state.delegatedTasks[sessionId] ?? []
+            const updatedTasks = tasks.map(task =>
+              task.id === taskId ? { ...task, status, error } : task
+            )
+            return {
+              delegatedTasks: {
+                ...state.delegatedTasks,
+                [sessionId]: updatedTasks,
+              },
+            }
+          },
+          undefined,
+          'updateDelegatedTaskStatus'
+        ),
+
+      updateDelegatedTaskAssignment: (sessionId, taskId, provider, model) =>
+        set(
+          state => {
+            const tasks = state.delegatedTasks[sessionId] ?? []
+            const updatedTasks = tasks.map(task =>
+              task.id === taskId
+                ? { ...task, assignedProvider: provider, assignedModel: model }
+                : task
+            )
+            return {
+              delegatedTasks: {
+                ...state.delegatedTasks,
+                [sessionId]: updatedTasks,
+              },
+            }
+          },
+          undefined,
+          'updateDelegatedTaskAssignment'
+        ),
+
+      getDelegatedTasks: sessionId => get().delegatedTasks[sessionId] ?? [],
+
+      clearDelegatedTasks: sessionId =>
+        set(
+          state => {
+            const { [sessionId]: _, ...rest } = state.delegatedTasks
+            return { delegatedTasks: rest }
+          },
+          undefined,
+          'clearDelegatedTasks'
+        ),
+
+      // Delegation progress tracking
+      setCurrentDelegationProgress: (sessionId, progress) =>
+        set(
+          state => ({
+            delegationProgress: {
+              ...state.delegationProgress,
+              [sessionId]: {
+                ...(state.delegationProgress[sessionId] ?? {
+                  currentTaskIndex: 0,
+                  totalTasks: 0,
+                  currentTaskId: '',
+                  output: '',
+                }),
+                ...progress,
+              },
+            },
+          }),
+          undefined,
+          'setCurrentDelegationProgress'
+        ),
+
+      appendDelegationOutput: (sessionId, content) =>
+        set(
+          state => {
+            const existing = state.delegationProgress[sessionId]
+            if (!existing) return state
+            return {
+              delegationProgress: {
+                ...state.delegationProgress,
+                [sessionId]: {
+                  ...existing,
+                  output: existing.output + content + '\n',
+                },
+              },
+            }
+          },
+          undefined,
+          'appendDelegationOutput'
+        ),
+
+      clearDelegationProgress: sessionId =>
+        set(
+          state => {
+            const { [sessionId]: _, ...rest } = state.delegationProgress
+            return { delegationProgress: rest }
+          },
+          undefined,
+          'clearDelegationProgress'
+        ),
+
+      getDelegationProgress: sessionId =>
+        get().delegationProgress[sessionId],
 
       // Legacy actions (deprecated - for backward compatibility)
       addSendingWorktree: worktreeId => {

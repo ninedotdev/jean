@@ -1,6 +1,5 @@
 import type { ToolCall } from '@/types/chat'
 import { isAskUserQuestion, isExitPlanMode } from '@/types/chat'
-import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 
 interface ExitPlanModeButtonProps {
@@ -21,7 +20,7 @@ interface ExitPlanModeButtonProps {
 }
 
 /**
- * Standalone component for ExitPlanMode approval button
+ * Minimal inline plan approval component
  * Rendered separately from ToolCallsDisplay so it appears after content
  * Also displays the plan file content if a Write to ~/.claude/plans/*.md was found
  *
@@ -53,12 +52,19 @@ export function ExitPlanModeButton({
   // Don't show button if already approved, not latest, or has follow-up
   if (isApproved || !isLatestPlanRequest || hasFollowUpMessage) return null
 
-  // Only render the approve button (plan is shown inline in timeline)
+  // Minimal inline approval
   return (
-    <div className="mt-3 flex gap-2">
-      <Button
+    <div className="flex items-center gap-3 mt-3 pt-2 border-t border-border/30">
+      <span className="flex items-center gap-1.5 text-xs text-yellow-500/80">
+        <span className="h-1.5 w-1.5 rounded-full bg-yellow-500/80" />
+        <span className="font-medium">Plan ready</span>
+      </span>
+      <div className="flex-1" />
+      <button
         ref={buttonRef}
+        type="button"
         onClick={() => onPlanApproval?.()}
+        className="px-3 py-1 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
       >
         Approve
         {shortcut && (
@@ -66,15 +72,14 @@ export function ExitPlanModeButton({
             {shortcut}
           </Kbd>
         )}
-      </Button>
-      <Button
-        variant="destructive"
-        onClick={() => {
-          onPlanApprovalYolo?.()
-        }}
+      </button>
+      <button
+        type="button"
+        onClick={() => onPlanApprovalYolo?.()}
+        className="px-2 py-1 text-xs text-destructive/70 hover:text-destructive transition-colors"
       >
-        Approve (yolo)
-      </Button>
+        Yolo
+      </button>
     </div>
   )
 }

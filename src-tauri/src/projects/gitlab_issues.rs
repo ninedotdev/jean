@@ -397,6 +397,7 @@ pub fn slugify_title(title: &str) -> String {
 
 /// Generate a branch name from a GitLab issue
 /// e.g., Issue !123 "Fix the login bug" -> "issue-123-fix-the-login-bug"
+#[allow(dead_code)]
 pub fn generate_branch_name_from_gitlab_issue(issue_iid: u32, title: &str) -> String {
     let slug = slugify_title(title);
     format!("issue-{issue_iid}-{slug}")

@@ -2,13 +2,13 @@ import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react
 import {
   FileText,
   ImageIcon,
-  Loader2,
   AlertCircle,
   Pencil,
   Eye,
   Save,
   ExternalLink,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -19,8 +19,8 @@ import { getLanguageFromPath } from '@/lib/language-detection'
 import { getFilename } from '@/lib/path-utils'
 import { useTheme } from '@/hooks/use-theme'
 import { usePreferences } from '@/services/preferences'
+import { useWriteFileContent, useOpenFileInApp } from '@/services/files'
 import type { SyntaxTheme } from '@/types/preferences'
-import { toast } from 'sonner'
 
 // Lazy load CodeEditor since it's heavy
 const CodeEditor = lazy(() =>
@@ -61,7 +61,7 @@ function SyntaxHighlightedCode({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        <Spinner size={20} className="mr-2" />
         Highlighting...
       </div>
     )
@@ -93,11 +93,12 @@ export function FileContentModal({ filePath, onClose }: FileContentModalProps) {
   const [editedContent, setEditedContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
 
   const { theme } = useTheme()
   const { data: preferences } = usePreferences()
+  const writeFileContent = useWriteFileContent()
+  const openFileInApp = useOpenFileInApp()
 
   // Resolve 'system' theme to actual dark/light
   const resolvedTheme = useMemo((): 'dark' | 'light' => {
@@ -157,39 +158,32 @@ export function FileContentModal({ filePath, onClose }: FileContentModalProps) {
 
   // Check if content has been modified
   const hasChanges = isEditing && editedContent !== content
+  const isSaving = writeFileContent.isPending
 
   // Handle save
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(() => {
     if (!filePath || !editedContent) return
 
-    setIsSaving(true)
-    try {
-      await invoke('write_file_content', { path: filePath, content: editedContent })
-      setContent(editedContent)
-      setIsEditing(false)
-      toast.success('File saved')
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      toast.error(`Failed to save: ${message}`)
-    } finally {
-      setIsSaving(false)
-    }
-  }, [filePath, editedContent])
+    writeFileContent.mutate(
+      { path: filePath, content: editedContent },
+      {
+        onSuccess: () => {
+          setContent(editedContent)
+          setIsEditing(false)
+        },
+      }
+    )
+  }, [filePath, editedContent, writeFileContent])
 
   // Handle open in external editor
-  const handleOpenExternal = useCallback(async () => {
+  const handleOpenExternal = useCallback(() => {
     if (!filePath) return
 
-    try {
-      await invoke('open_file_in_default_app', {
-        path: filePath,
-        editor: preferences?.editor,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      toast.error(`Failed to open: ${message}`)
-    }
-  }, [filePath, preferences?.editor])
+    openFileInApp.mutate({
+      path: filePath,
+      editor: preferences?.editor,
+    })
+  }, [filePath, preferences?.editor, openFileInApp])
 
   // Toggle edit mode
   const handleToggleEdit = useCallback(() => {
@@ -249,7 +243,7 @@ export function FileContentModal({ filePath, onClose }: FileContentModalProps) {
                           disabled={!hasChanges || isSaving}
                         >
                           {isSaving ? (
-                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            <Spinner size={16} className="mr-1" />
                           ) : (
                             <Save className="h-4 w-4 mr-1" />
                           )}
@@ -293,7 +287,7 @@ export function FileContentModal({ filePath, onClose }: FileContentModalProps) {
             <Suspense
               fallback={
                 <div className="flex items-center justify-center py-8 text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                  <Spinner size={20} className="mr-2" />
                   Loading editor...
                 </div>
               }
@@ -310,7 +304,7 @@ export function FileContentModal({ filePath, onClose }: FileContentModalProps) {
           <ScrollArea className="h-[calc(85vh-6rem)] mt-2">
             {isLoading && (
               <div className="flex items-center justify-center py-8 text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                <Spinner size={20} className="mr-2" />
                 Loading file...
               </div>
             )}

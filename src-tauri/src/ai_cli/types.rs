@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Available AI CLI providers
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AiCliProvider {
@@ -15,8 +16,11 @@ pub enum AiCliProvider {
     Gemini,
     /// Codex CLI (OpenAI)
     Codex,
+    /// Kimi Code CLI (Moonshot AI)
+    Kimi,
 }
 
+#[allow(dead_code)]
 impl AiCliProvider {
     /// Get the display name for the provider
     pub fn display_name(&self) -> &'static str {
@@ -24,6 +28,7 @@ impl AiCliProvider {
             AiCliProvider::Claude => "Claude (Anthropic)",
             AiCliProvider::Gemini => "Gemini (Google)",
             AiCliProvider::Codex => "Codex (OpenAI)",
+            AiCliProvider::Kimi => "Kimi (Moonshot AI)",
         }
     }
 
@@ -33,6 +38,7 @@ impl AiCliProvider {
             AiCliProvider::Claude => "claude",
             AiCliProvider::Gemini => "gemini",
             AiCliProvider::Codex => "codex",
+            AiCliProvider::Kimi => "kimi",
         }
     }
 
@@ -42,6 +48,7 @@ impl AiCliProvider {
             "claude" => Some(AiCliProvider::Claude),
             "gemini" => Some(AiCliProvider::Gemini),
             "codex" => Some(AiCliProvider::Codex),
+            "kimi" => Some(AiCliProvider::Kimi),
             _ => None,
         }
     }

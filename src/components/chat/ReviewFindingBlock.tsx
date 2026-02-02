@@ -14,8 +14,8 @@ import {
   Info,
   ChevronRight,
   Wrench,
-  Loader2,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import type { ReviewFinding, FindingSeverity } from '@/types/chat'
 import { getFindingKey } from './review-finding-utils'
@@ -281,7 +281,7 @@ export function ReviewFindingBlock({
                 <Button onClick={handleFix} disabled={disabled || isFixing}>
                   {isFixing ? (
                     <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <Spinner size={14} />
                       Fixing...
                     </>
                   ) : (
@@ -389,7 +389,7 @@ export function ReviewFindingsList({
           >
             {isFixingAll ? (
               <>
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner size={12} />
                 Fixing all...
               </>
             ) : (

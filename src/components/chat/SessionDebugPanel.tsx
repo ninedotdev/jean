@@ -145,7 +145,9 @@ export function SessionDebugPanel({
         {debugInfo.manifest_file ? (
           <span
             className="text-foreground/70 cursor-pointer hover:underline"
-            onClick={() => onFileClick?.(debugInfo.manifest_file!)}
+            onClick={() => {
+              if (debugInfo.manifest_file) onFileClick?.(debugInfo.manifest_file)
+            }}
           >
             ...{debugInfo.manifest_file.slice(-55)}
           </span>
@@ -158,7 +160,9 @@ export function SessionDebugPanel({
           claude jsonl:{' '}
           <span
             className="text-foreground/70 cursor-pointer hover:underline"
-            onClick={() => onFileClick?.(debugInfo.claude_jsonl_file!)}
+            onClick={() => {
+              if (debugInfo.claude_jsonl_file) onFileClick?.(debugInfo.claude_jsonl_file)
+            }}
           >
             ...{debugInfo.claude_jsonl_file.slice(-55)}
           </span>

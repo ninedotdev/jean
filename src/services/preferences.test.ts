@@ -37,8 +37,10 @@ const createTestQueryClient = () =>
   })
 
 const createWrapper = (queryClient: QueryClient) => {
-  return ({ children }: { children: React.ReactNode }) =>
+  const Wrapper = ({ children }: { children: React.ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, children)
+  Wrapper.displayName = 'QueryClientWrapper'
+  return Wrapper
 }
 
 describe('preferences service', () => {
@@ -101,6 +103,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
       vi.mocked(invoke).mockResolvedValueOnce(mockPreferences)
 
@@ -180,6 +183,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
       vi.mocked(invoke).mockResolvedValueOnce(prefsWithOldBinding)
 
@@ -234,6 +238,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
 
       const { result } = renderHook(() => useSavePreferences(), {
@@ -286,6 +291,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
 
       const { result } = renderHook(() => useSavePreferences(), {
@@ -338,6 +344,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
 
       const { result } = renderHook(() => useSavePreferences(), {
@@ -390,6 +397,7 @@ describe('preferences service', () => {
         review_sound: 'none',
         workspace_folder: '',
         default_ai_provider: 'claude',
+        show_usage_status_bar: true,
       }
 
       const { result } = renderHook(() => useSavePreferences(), {

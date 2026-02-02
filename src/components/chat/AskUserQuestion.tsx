@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Markdown } from '@/components/ui/markdown'
 import { Kbd } from '@/components/ui/kbd'
 import {
@@ -214,10 +213,10 @@ export function AskUserQuestion({
   // Render full question content (used both inline and in collapsible)
   function renderQuestionContent() {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4">
         {/* Intro text (e.g., "Before we continue, I have some questions:") */}
         {introText && (
-          <div className="text-muted-foreground">
+          <div className="text-muted-foreground text-sm">
             <Markdown>{introText}</Markdown>
           </div>
         )}
@@ -227,26 +226,46 @@ export function AskUserQuestion({
             : answers.get(qIndex)
 
           return (
-            <div key={qIndex}>
-              {/* Header (optional) */}
-              {question.header && (
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {question.header}
-                </div>
-              )}
+            <div key={qIndex} className="space-y-3">
+              {/* Header row with badge and counter */}
+              <div className="flex items-center justify-between">
+                {question.header ? (
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1 rounded bg-primary/20 px-2 py-0.5 text-xs font-medium text-primary">
+                      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                      {question.header}
+                    </span>
+                  </div>
+                ) : (
+                  <div />
+                )}
+                {questions.length > 1 && (
+                  <span className="text-xs text-muted-foreground">
+                    {qIndex + 1}/{questions.length}
+                  </span>
+                )}
+              </div>
 
               {/* Question text */}
-              <div className="mb-3 font-medium text-foreground">
+              <div className="text-sm text-foreground">
                 <Markdown>{question.question}</Markdown>
               </div>
 
-              {/* Options - indented section */}
-              <div className="ml-3 space-y-3">
+              {/* Options */}
+              <div className="space-y-2">
                 {question.multiSelect ? (
                   // Checkbox mode
-                  <div className="space-y-2.5">
+                  <div className="space-y-1.5">
                     {question.options.map((option, oIndex) => (
-                      <div key={oIndex} className="flex items-start gap-2.5">
+                      <label
+                        key={oIndex}
+                        htmlFor={`${toolCallId}-q${qIndex}-o${oIndex}`}
+                        className={cn(
+                          'flex items-center gap-3 rounded-md px-3 py-2 transition-colors',
+                          !readOnly && 'cursor-pointer hover:bg-muted/50',
+                          answer?.selectedOptions.includes(oIndex) && 'bg-muted/30'
+                        )}
+                      >
                         <Checkbox
                           id={`${toolCallId}-q${qIndex}-o${oIndex}`}
                           checked={
@@ -256,28 +275,12 @@ export function AskUserQuestion({
                             !readOnly && toggleOption(qIndex, oIndex)
                           }
                           disabled={readOnly}
-                          className={cn(
-                            'mt-0.5',
-                            !readOnly && 'cursor-pointer'
-                          )}
+                          className={cn(!readOnly && 'cursor-pointer')}
                         />
-                        <Label
-                          htmlFor={`${toolCallId}-q${qIndex}-o${oIndex}`}
-                          className={cn(
-                            'flex flex-1 flex-col items-start',
-                            !readOnly && 'cursor-pointer'
-                          )}
-                        >
-                          <span className="font-medium">
-                            <Markdown>{option.label}</Markdown>
-                          </span>
-                          {option.description && (
-                            <span className="mt-1 text-xs text-muted-foreground">
-                              <Markdown>{option.description}</Markdown>
-                            </span>
-                          )}
-                        </Label>
-                      </div>
+                        <span className="text-sm text-foreground/90">
+                          {option.label}
+                        </span>
+                      </label>
                     ))}
                   </div>
                 ) : (
@@ -288,54 +291,46 @@ export function AskUserQuestion({
                       !readOnly && selectOption(qIndex, parseInt(value, 10))
                     }
                     disabled={readOnly}
-                    className="space-y-2.5"
+                    className="space-y-1.5"
                   >
                     {question.options.map((option, oIndex) => (
-                      <div key={oIndex} className="flex items-start gap-2.5">
+                      <label
+                        key={oIndex}
+                        htmlFor={`${toolCallId}-q${qIndex}-o${oIndex}`}
+                        className={cn(
+                          'flex items-center gap-3 rounded-md px-3 py-2 transition-colors',
+                          !readOnly && 'cursor-pointer hover:bg-muted/50',
+                          answer?.selectedOptions[0] === oIndex && 'bg-muted/30'
+                        )}
+                      >
                         <RadioGroupItem
                           value={oIndex.toString()}
                           id={`${toolCallId}-q${qIndex}-o${oIndex}`}
-                          className={cn(
-                            'mt-0.5',
-                            !readOnly && 'cursor-pointer'
-                          )}
+                          className={cn(!readOnly && 'cursor-pointer')}
                         />
-                        <Label
-                          htmlFor={`${toolCallId}-q${qIndex}-o${oIndex}`}
-                          className={cn(
-                            'flex flex-1 flex-col items-start',
-                            !readOnly && 'cursor-pointer'
-                          )}
-                        >
-                          <span className="font-medium">
-                            <Markdown>{option.label}</Markdown>
-                          </span>
-                          {option.description && (
-                            <span className="mt-1 text-xs text-muted-foreground">
-                              <Markdown>{option.description}</Markdown>
-                            </span>
-                          )}
-                        </Label>
-                      </div>
+                        <span className="text-sm text-foreground/90">
+                          {option.label}
+                        </span>
+                      </label>
                     ))}
                   </RadioGroup>
                 )}
 
-                {/* Show custom text if provided (read-only) or input field (editable) */}
+                {/* Show custom text if provided (read-only) or "Other" option indicator */}
                 {readOnly ? (
                   answer?.customText && (
-                    <div className="pt-1 text-muted-foreground italic">
+                    <div className="px-3 py-2 text-sm text-muted-foreground italic">
                       &ldquo;{answer.customText}&rdquo;
                     </div>
                   )
                 ) : (
-                  <div className="pt-1">
+                  <div className="px-3 py-2">
                     <Input
-                      placeholder="Or type your own answer..."
+                      placeholder="Other..."
                       value={answers.get(qIndex)?.customText ?? ''}
                       onChange={e => updateCustomText(qIndex, e.target.value)}
                       disabled={readOnly}
-                      className="cursor-text font-mono text-sm select-text bg-white dark:bg-input"
+                      className="cursor-text font-mono text-sm select-text bg-background border-border/50 h-9"
                     />
                   </div>
                 )}
@@ -346,25 +341,29 @@ export function AskUserQuestion({
 
         {/* Submit/Skip buttons (only if not read-only) */}
         {!readOnly && (
-          <div className="flex justify-start gap-2 pt-2">
-            <Button size="sm" onClick={handleSubmit}>
-              Answer
+          <div className="flex gap-2 pt-2 border-t border-border/50">
+            {onSkip && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onSkip(toolCallId)}
+                className="flex-1 h-9"
+              >
+                Skip
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={handleSubmit}
+              className={cn('h-9', onSkip ? 'flex-1' : 'w-full')}
+            >
+              Next
               <Kbd className="ml-1.5 h-4 text-[10px] bg-primary-foreground/20 text-primary-foreground">
                 {formatShortcutDisplay(
                   DEFAULT_KEYBINDINGS.approve_plan ?? 'mod+enter'
                 )}
               </Kbd>
             </Button>
-            {onSkip && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onSkip(toolCallId)}
-                className="text-muted-foreground"
-              >
-                Skip
-              </Button>
-            )}
           </div>
         )}
       </div>
@@ -373,7 +372,7 @@ export function AskUserQuestion({
 
   // Default: render full interactive question form
   return (
-    <div className="my-3 min-w-0 cursor-default rounded border border-primary/30 bg-primary/5 p-4 font-mono text-sm select-none">
+    <div className="my-3 min-w-0 cursor-default rounded-lg border border-border bg-sidebar p-4 font-mono text-sm select-none">
       {renderQuestionContent()}
     </div>
   )

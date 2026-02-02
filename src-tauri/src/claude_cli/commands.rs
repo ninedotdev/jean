@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
-use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
 use super::config::{ensure_cli_dir, get_cli_binary_path};
@@ -85,9 +84,8 @@ pub async fn check_claude_cli_installed(app: AppHandle) -> Result<ClaudeCliStatu
     }
 
     // Try to get the version by running claude --version
-    // Use shell wrapper to bypass macOS security restrictions
-    let shell_cmd = format!("{:?} --version", binary_path);
-    let version = match crate::platform::shell_command(&shell_cmd).output() {
+    // Use cli_command to handle .cmd files on Windows
+    let version = match crate::platform::cli_command(&binary_path, &["--version"]).output() {
         Ok(output) => {
             if output.status.success() {
                 let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -248,6 +246,11 @@ fn get_platform() -> Result<&'static str, String> {
         return Ok("linux-arm64");
     }
 
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return Ok("win32-x64");
+    }
+
     #[allow(unreachable_code)]
     Err("Unsupported platform".to_string())
 }
@@ -339,7 +342,10 @@ pub async fn install_claude_cli(app: AppHandle, version: Option<String>) -> Resu
         .clone();
     log::trace!("Expected checksum for {platform}: {expected_checksum}");
 
-    // Build download URL
+    // Build download URL (Windows uses .exe extension)
+    #[cfg(windows)]
+    let download_url = format!("{CLAUDE_DIST_BUCKET}/{version}/{platform}/claude.exe");
+    #[cfg(not(windows))]
     let download_url = format!("{CLAUDE_DIST_BUCKET}/{version}/{platform}/claude");
     log::trace!("Downloading from: {download_url}");
 
@@ -451,16 +457,14 @@ pub async fn check_claude_cli_auth(app: AppHandle) -> Result<ClaudeAuthStatus, S
 
     // Run a simple non-interactive query to check if authenticated
     // Use --print to avoid interactive mode, and a simple prompt
-    let shell_cmd = format!(
-        "{:?} --print --output-format text -p 'Reply with just the word OK'",
-        binary_path
-    );
+    log::trace!("Running auth check for: {:?}", binary_path);
 
-    log::trace!("Running auth check: {:?}", shell_cmd);
-
-    let output = crate::platform::shell_command(&shell_cmd)
-        .output()
-        .map_err(|e| format!("Failed to execute Claude CLI: {e}"))?;
+    let output = crate::platform::cli_command(
+        &binary_path,
+        &["--print", "--output-format", "text", "-p", "Reply with just the word OK"],
+    )
+    .output()
+    .map_err(|e| format!("Failed to execute Claude CLI: {e}"))?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

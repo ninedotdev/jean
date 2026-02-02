@@ -3,7 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Loader2, ChevronDown } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -17,6 +18,8 @@ import {
   useGeminiCliAuth,
   useCodexCliStatus,
   useCodexCliAuth,
+  useKimiCliStatus,
+  useKimiCliAuth,
 } from '@/services/ai-cli'
 import { useUIStore } from '@/store/ui-store'
 import type { ClaudeAuthStatus } from '@/types/claude-cli'
@@ -63,6 +66,19 @@ import {
   setGitPollInterval,
   setRemotePollInterval,
 } from '@/services/git-status'
+
+/** Detect if running on Windows */
+const isWindows = typeof navigator !== 'undefined' && navigator.platform.includes('Win')
+
+/** Escape a path for shell command on current platform */
+function escapePathForShell(path: string): string {
+  if (isWindows) {
+    // Windows cmd.exe: use double quotes, escape internal double quotes
+    return `"${path.replace(/"/g, '\\"')}"`
+  }
+  // Unix shells: use single quotes, escape internal single quotes
+  return `'${path.replace(/'/g, "'\\''")}'`
+}
 
 interface CleanupResult {
   deleted_worktrees: number
@@ -115,6 +131,7 @@ export const GeneralPane: React.FC = () => {
   const { data: glabStatus, isLoading: isGlabLoading } = useGlabCliStatus()
   const { data: geminiStatus, isLoading: isGeminiLoading } = useGeminiCliStatus()
   const { data: codexStatus, isLoading: isCodexLoading } = useCodexCliStatus()
+  const { data: kimiStatus, isLoading: isKimiLoading } = useKimiCliStatus()
 
   // Auth status queries - only enabled when CLI is installed
   const { data: claudeAuth, isLoading: isClaudeAuthLoading } = useClaudeCliAuth({
@@ -132,6 +149,9 @@ export const GeneralPane: React.FC = () => {
   const { data: codexAuth, isLoading: isCodexAuthLoading } = useCodexCliAuth(
     !!codexStatus?.installed
   )
+  const { data: kimiAuth, isLoading: isKimiAuthLoading } = useKimiCliAuth(
+    !!kimiStatus?.installed
+  )
 
   // Track which auth check is in progress (for manual refresh)
   const [checkingClaudeAuth, setCheckingClaudeAuth] = useState(false)
@@ -139,6 +159,7 @@ export const GeneralPane: React.FC = () => {
   const [checkingGlabAuth, setCheckingGlabAuth] = useState(false)
   const [checkingGeminiAuth, _setCheckingGeminiAuth] = useState(false)
   const [checkingCodexAuth, _setCheckingCodexAuth] = useState(false)
+  const [checkingKimiAuth, _setCheckingKimiAuth] = useState(false)
 
   // Use global ui-store for CLI modals
   const openCliUpdateModal = useUIStore(state => state.openCliUpdateModal)
@@ -293,7 +314,7 @@ export const GeneralPane: React.FC = () => {
     }
 
     // Not authenticated, open login modal
-    const escapedPath = `'${cliStatus.path.replace(/'/g, "'\\''")}'`
+    const escapedPath = escapePathForShell(cliStatus.path)
     openCliLoginModal('claude', escapedPath)
   }, [cliStatus?.path, openCliLoginModal, queryClient])
 
@@ -316,7 +337,7 @@ export const GeneralPane: React.FC = () => {
     }
 
     // Not authenticated, open login modal
-    const escapedPath = `'${ghStatus.path.replace(/'/g, "'\\''")}'`
+    const escapedPath = escapePathForShell(ghStatus.path)
     openCliLoginModal('gh', `${escapedPath} auth login`)
   }, [ghStatus?.path, openCliLoginModal, queryClient])
 
@@ -347,7 +368,7 @@ export const GeneralPane: React.FC = () => {
     }
 
     // Not authenticated, open login modal
-    const escapedPath = `'${glabStatus.path.replace(/'/g, "'\\''")}'`
+    const escapedPath = escapePathForShell(glabStatus.path)
     openCliLoginModal('glab', `${escapedPath} auth login`)
   }, [glabStatus?.path, openCliLoginModal, queryClient])
 
@@ -363,6 +384,10 @@ export const GeneralPane: React.FC = () => {
     ? codexStatus.path
     : 'Codex CLI for OpenAI'
 
+  const kimiStatusDescription = kimiStatus?.installed
+    ? kimiStatus.path
+    : 'Kimi CLI for Moonshot AI'
+
   const handleCopyPath = useCallback((path: string | null | undefined) => {
     if (!path) return
     navigator.clipboard.writeText(path)
@@ -377,7 +402,7 @@ export const GeneralPane: React.FC = () => {
           cliStatus?.installed ? (
             checkingClaudeAuth || isClaudeAuthLoading ? (
               <span className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="size-3 animate-spin" />
+                <Spinner size={12} />
                 Checking...
               </span>
             ) : claudeAuth?.authenticated ? (
@@ -414,7 +439,7 @@ export const GeneralPane: React.FC = () => {
             }
           >
             {isCliLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              <Spinner size={16} />
             ) : cliStatus?.installed ? (
               <Button
                 variant="outline"
@@ -442,7 +467,7 @@ export const GeneralPane: React.FC = () => {
           ghStatus?.installed ? (
             checkingGhAuth || isGhAuthLoading ? (
               <span className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="size-3 animate-spin" />
+                <Spinner size={12} />
                 Checking...
               </span>
             ) : ghAuth?.authenticated ? (
@@ -479,7 +504,7 @@ export const GeneralPane: React.FC = () => {
             }
           >
             {isGhLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              <Spinner size={16} />
             ) : ghStatus?.installed ? (
               <Button
                 variant="outline"
@@ -507,7 +532,7 @@ export const GeneralPane: React.FC = () => {
           glabStatus?.installed ? (
             checkingGlabAuth || isGlabAuthLoading ? (
               <span className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="size-3 animate-spin" />
+                <Spinner size={12} />
                 Checking...
               </span>
             ) : glabAuth?.authenticated ? (
@@ -546,7 +571,7 @@ export const GeneralPane: React.FC = () => {
             }
           >
             {isGlabLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              <Spinner size={16} />
             ) : glabStatus?.installed ? (
               <Button
                 variant="outline"
@@ -574,7 +599,7 @@ export const GeneralPane: React.FC = () => {
           geminiStatus?.installed ? (
             checkingGeminiAuth || isGeminiAuthLoading ? (
               <span className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="size-3 animate-spin" />
+                <Spinner size={12} />
                 Checking...
               </span>
             ) : geminiAuth?.authenticated ? (
@@ -605,7 +630,7 @@ export const GeneralPane: React.FC = () => {
             }
           >
             {isGeminiLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              <Spinner size={16} />
             ) : geminiStatus?.installed ? (
               <Button
                 variant="outline"
@@ -636,7 +661,7 @@ export const GeneralPane: React.FC = () => {
           codexStatus?.installed ? (
             checkingCodexAuth || isCodexAuthLoading ? (
               <span className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="size-3 animate-spin" />
+                <Spinner size={12} />
                 Checking...
               </span>
             ) : codexAuth?.authenticated ? (
@@ -667,7 +692,7 @@ export const GeneralPane: React.FC = () => {
             }
           >
             {isCodexLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              <Spinner size={16} />
             ) : codexStatus?.installed ? (
               <Button
                 variant="outline"
@@ -682,6 +707,68 @@ export const GeneralPane: React.FC = () => {
                 className="w-40"
                 onClick={() => {
                   navigator.clipboard.writeText('npm install -g @openai/codex')
+                  toast.success('Install command copied to clipboard')
+                }}
+              >
+                Copy install cmd
+              </Button>
+            )}
+          </InlineField>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Kimi CLI"
+        actions={
+          kimiStatus?.installed ? (
+            checkingKimiAuth || isKimiAuthLoading ? (
+              <span className="text-sm text-muted-foreground flex items-center gap-2">
+                <Spinner size={12} />
+                Checking...
+              </span>
+            ) : kimiAuth?.authenticated ? (
+              <span className="text-sm text-muted-foreground">Logged in</span>
+            ) : (
+              <span className="text-sm text-muted-foreground">Not authenticated</span>
+            )
+          ) : (
+            <span className="text-sm text-muted-foreground">Not installed</span>
+          )
+        }
+      >
+        <div className="space-y-4">
+          <InlineField
+            label={kimiStatus?.installed ? 'Version' : 'Status'}
+            description={
+              kimiStatus?.installed ? (
+                <button
+                  onClick={() => handleCopyPath(kimiStatus.path)}
+                  className="text-left hover:underline cursor-pointer"
+                  title="Click to copy path"
+                >
+                  {kimiStatusDescription}
+                </button>
+              ) : (
+                'Optional - curl -LsSf https://code.kimi.com/install.sh | bash'
+              )
+            }
+          >
+            {isKimiLoading ? (
+              <Spinner size={16} />
+            ) : kimiStatus?.installed ? (
+              <Button
+                variant="outline"
+                className="w-40 justify-between"
+                disabled
+              >
+                {kimiStatus.version ?? 'Installed'}
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                className="w-40"
+                onClick={() => {
+                  navigator.clipboard.writeText('curl -LsSf https://code.kimi.com/install.sh | bash')
                   toast.success('Install command copied to clipboard')
                 }}
               >
@@ -847,6 +934,23 @@ export const GeneralPane: React.FC = () => {
                   savePreferences.mutate({
                     ...preferences,
                     allow_web_tools_in_plan_mode: checked,
+                  })
+                }
+              }}
+            />
+          </InlineField>
+
+          <InlineField
+            label="Usage status bar"
+            description="Show cost, context and rate limits in sidebar"
+          >
+            <Switch
+              checked={preferences?.show_usage_status_bar ?? true}
+              onCheckedChange={checked => {
+                if (preferences) {
+                  savePreferences.mutate({
+                    ...preferences,
+                    show_usage_status_bar: checked,
                   })
                 }
               }}

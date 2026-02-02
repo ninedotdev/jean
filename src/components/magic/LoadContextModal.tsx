@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen,
-  Loader2,
   Trash2,
   Search,
   MessageSquare,
@@ -15,6 +14,7 @@ import {
   GitPullRequest,
   Eye,
 } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -36,6 +36,7 @@ import type {
   Session,
 } from '@/types/chat'
 import { usePreferences } from '@/services/preferences'
+import { useDeleteContextFile, useRenameSavedContext } from '@/services/files'
 import {
   useGitHubIssues,
   useGitHubPRs,
@@ -246,13 +247,15 @@ export function LoadContextModal({
     const attachedSlugs = new Set(attachedSavedContexts?.map(c => c.slug) ?? [])
 
     // Filter out already-attached contexts
-    let filtered = contextsData.contexts.filter(ctx => !attachedSlugs.has(ctx.slug))
+    const filtered = contextsData.contexts.filter(
+      (ctx: SavedContext) => !attachedSlugs.has(ctx.slug)
+    )
 
     if (!searchQuery) return filtered
 
     const query = searchQuery.toLowerCase()
     return filtered.filter(
-      ctx =>
+      (ctx: SavedContext) =>
         ctx.slug.toLowerCase().includes(query) ||
         ctx.project_name.toLowerCase().includes(query) ||
         (ctx.name && ctx.name.toLowerCase().includes(query))
@@ -288,23 +291,7 @@ export function LoadContextModal({
   }, [allSessionsData, searchQuery, activeSessionId])
 
   // Mutation for renaming contexts
-  const renameMutation = useMutation({
-    mutationFn: async ({
-      filename,
-      newName,
-    }: {
-      filename: string
-      newName: string
-    }) => {
-      await invoke('rename_saved_context', { filename, newName })
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['session-context'] })
-    },
-    onError: error => {
-      toast.error(`Failed to rename context: ${error}`)
-    },
-  })
+  const renameMutation = useRenameSavedContext()
 
   // Track the previous open state to detect when modal opens
   const prevOpenRef = useRef(false)
@@ -400,7 +387,7 @@ export function LoadContextModal({
 
   // Handle loading/refreshing an issue
   const handleLoadIssue = useCallback(
-    async (issueNumber: number, isRefresh: boolean = false) => {
+    async (issueNumber: number, isRefresh = false) => {
       if (!worktreeId || !worktreePath) {
         toast.error('No active worktree')
         return
@@ -436,7 +423,7 @@ export function LoadContextModal({
 
   // Handle loading/refreshing a PR
   const handleLoadPR = useCallback(
-    async (prNumber: number, isRefresh: boolean = false) => {
+    async (prNumber: number, isRefresh = false) => {
       if (!worktreeId || !worktreePath) {
         toast.error('No active worktree')
         return
@@ -578,18 +565,23 @@ export function LoadContextModal({
     [handleLoadPR]
   )
 
+  // Use file service hooks
+  const deleteContextFile = useDeleteContextFile()
+
   // Context tab handlers
   const handleDeleteContext = useCallback(
-    async (e: React.MouseEvent, context: SavedContext) => {
+    (e: React.MouseEvent, context: SavedContext) => {
       e.stopPropagation()
-      try {
-        await invoke('delete_context_file', { path: context.path })
-        refetchContexts()
-      } catch (err) {
-        console.error('Failed to delete context:', err)
-      }
+      deleteContextFile.mutate(
+        { path: context.path },
+        {
+          onSuccess: () => {
+            refetchContexts()
+          },
+        }
+      )
     },
-    [refetchContexts]
+    [refetchContexts, deleteContextFile]
   )
 
   // Handle attaching a saved context from the "Available Contexts" list
@@ -1100,7 +1092,7 @@ function IssuesTab({
       {isLoadingContexts ? (
         <div className="px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Spinner size={16} />
             Loading...
           </div>
         </div>
@@ -1177,7 +1169,7 @@ function IssuesTab({
       <ScrollArea className="flex-1 min-h-0">
         {isLoading && (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <Spinner size={20} />
             <span className="ml-2 text-sm text-muted-foreground">
               Loading issues...
             </span>
@@ -1207,7 +1199,7 @@ function IssuesTab({
 
         {!isLoading && !error && filteredItems.length === 0 && isSearching && (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <Spinner size={16} />
             <span className="ml-2 text-sm text-muted-foreground">
               Searching GitHub...
             </span>
@@ -1229,7 +1221,7 @@ function IssuesTab({
             ))}
             {isSearching && (
               <div className="flex items-center justify-center py-2">
-                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                <Spinner size={12} />
                 <span className="ml-1.5 text-xs text-muted-foreground">
                   Searching GitHub for more results...
                 </span>
@@ -1301,7 +1293,7 @@ function PullRequestsTab({
       {isLoadingContexts ? (
         <div className="px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Spinner size={16} />
             Loading...
           </div>
         </div>
@@ -1378,7 +1370,7 @@ function PullRequestsTab({
       <ScrollArea className="flex-1 min-h-0">
         {isLoading && (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <Spinner size={20} />
             <span className="ml-2 text-sm text-muted-foreground">
               Loading pull requests...
             </span>
@@ -1408,7 +1400,7 @@ function PullRequestsTab({
 
         {!isLoading && !error && filteredItems.length === 0 && isSearching && (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <Spinner size={16} />
             <span className="ml-2 text-sm text-muted-foreground">
               Searching GitHub...
             </span>
@@ -1430,7 +1422,7 @@ function PullRequestsTab({
             ))}
             {isSearching && (
               <div className="flex items-center justify-center py-2">
-                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                <Spinner size={12} />
                 <span className="ml-1.5 text-xs text-muted-foreground">
                   Searching GitHub for more results...
                 </span>
@@ -1525,7 +1517,7 @@ function ContextsTab({
       {isLoadingAttachedContexts ? (
         <div className="px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Spinner size={16} />
             Loading...
           </div>
         </div>
@@ -1566,7 +1558,7 @@ function ContextsTab({
       <ScrollArea className="flex-1 min-h-0">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <Spinner size={24} />
           </div>
         ) : error ? (
           <div className="text-center py-8 text-destructive">
@@ -1699,7 +1691,7 @@ function SessionGroup({
               disabled={isDisabled}
             >
               {isGenerating ? (
-                <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground flex-shrink-0" />
+                <Spinner size={16} className="mt-0.5 flex-shrink-0" />
               ) : (
                 <MessageSquare className="h-4 w-4 mt-0.5 text-muted-foreground flex-shrink-0" />
               )}
@@ -1779,7 +1771,7 @@ function LoadedIssueItem({
           title="Refresh issue"
         >
           {isLoading ? (
-            <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
+            <Spinner size={14} />
           ) : (
             <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
           )}
@@ -1794,7 +1786,7 @@ function LoadedIssueItem({
           title="Remove from context"
         >
           {isRemoving ? (
-            <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
+            <Spinner size={14} />
           ) : (
             <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
           )}
@@ -1864,7 +1856,7 @@ function LoadedPRItem({
           title="Refresh PR"
         >
           {isLoading ? (
-            <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
+            <Spinner size={14} />
           ) : (
             <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
           )}
@@ -1879,7 +1871,7 @@ function LoadedPRItem({
           title="Remove from context"
         >
           {isRemoving ? (
-            <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
+            <Spinner size={14} />
           ) : (
             <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
           )}
@@ -1920,7 +1912,7 @@ function IssueItem({
       )}
     >
       {isLoading ? (
-        <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground flex-shrink-0" />
+        <Spinner size={16} className="mt-0.5 flex-shrink-0" />
       ) : (
         <CircleDot
           className={cn(
@@ -1992,7 +1984,7 @@ function PRItem({
       )}
     >
       {isLoading ? (
-        <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground flex-shrink-0" />
+        <Spinner size={16} className="mt-0.5 flex-shrink-0" />
       ) : (
         <GitPullRequest
           className={cn(
@@ -2121,7 +2113,7 @@ function ContextItem({
       )}
     >
       {isLoading ? (
-        <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-muted-foreground flex-shrink-0" />
+        <Spinner size={16} className="mt-0.5 flex-shrink-0" />
       ) : (
         <FolderOpen className="h-4 w-4 mt-0.5 text-blue-500 flex-shrink-0" />
       )}
@@ -2215,7 +2207,7 @@ function AttachedContextItem({
           title="Remove from context"
         >
           {isRemoving ? (
-            <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
+            <Spinner size={14} />
           ) : (
             <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
           )}

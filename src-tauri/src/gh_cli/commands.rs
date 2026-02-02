@@ -76,9 +76,8 @@ pub async fn check_gh_cli_installed(app: AppHandle) -> Result<GhCliStatus, Strin
     }
 
     // Try to get the version by running gh --version
-    // Use shell wrapper to bypass macOS security restrictions
-    let shell_cmd = format!("{:?} --version", binary_path);
-    let version = match crate::platform::shell_command(&shell_cmd).output() {
+    // Use cli_command to handle .cmd files on Windows
+    let version = match crate::platform::cli_command(&binary_path, &["--version"]).output() {
         Ok(output) => {
             if output.status.success() {
                 let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -305,10 +304,8 @@ pub async fn install_gh_cli(app: AppHandle, version: Option<String>) -> Result<(
     }
 
     // Verify the binary works
-    // Use shell wrapper to bypass macOS security restrictions
-    let shell_cmd = format!("{:?} --version", binary_path);
-    log::trace!("Running via shell: {:?}", shell_cmd);
-    let version_output = crate::platform::shell_command(&shell_cmd)
+    log::trace!("Verifying binary: {:?}", binary_path);
+    let version_output = crate::platform::cli_command(&binary_path, &["--version"])
         .output()
         .map_err(|e| format!("Failed to verify GitHub CLI: {e}"))?;
 
@@ -392,7 +389,14 @@ fn extract_zip(
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open zip archive: {e}"))?;
 
-    // Extract all files
+    #[cfg(not(target_os = "windows"))]
+    let binary_name = "gh";
+    #[cfg(target_os = "windows")]
+    let binary_name = "gh.exe";
+
+    let mut found_binary_path: Option<std::path::PathBuf> = None;
+
+    // Extract all files and track the binary location
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -417,25 +421,49 @@ fn extract_zip(
                 .map_err(|e| format!("Failed to create file: {e}"))?;
             std::io::copy(&mut file, &mut outfile)
                 .map_err(|e| format!("Failed to extract file: {e}"))?;
+
+            // Check if this is the binary we're looking for
+            if outpath.file_name().map(|n| n == binary_name).unwrap_or(false) {
+                // Prefer bin/gh over other locations
+                if outpath.parent().map(|p| p.ends_with("bin")).unwrap_or(false) {
+                    found_binary_path = Some(outpath.clone());
+                } else if found_binary_path.is_none() {
+                    found_binary_path = Some(outpath.clone());
+                }
+            }
         }
     }
 
-    // The binary is at gh_{version}_{platform}/bin/gh (or gh.exe on Windows)
-    #[cfg(not(target_os = "windows"))]
-    let binary_name = "gh";
-    #[cfg(target_os = "windows")]
-    let binary_name = "gh.exe";
+    // If we found the binary during extraction, return it
+    if let Some(path) = found_binary_path {
+        log::trace!("Found binary at: {:?}", path);
+        return Ok(path);
+    }
 
+    // Fallback: try the expected path structure
     let binary_path = temp_dir
         .join(format!("gh_{version}_{platform}"))
         .join("bin")
         .join(binary_name);
 
-    if !binary_path.exists() {
-        return Err(format!("Binary not found in archive at {:?}", binary_path));
+    if binary_path.exists() {
+        return Ok(binary_path);
     }
 
-    Ok(binary_path)
+    // Try alternative structure without underscore
+    let binary_path_alt = temp_dir
+        .join(format!("gh-{version}-{platform}"))
+        .join("bin")
+        .join(binary_name);
+
+    if binary_path_alt.exists() {
+        return Ok(binary_path_alt);
+    }
+
+    Err(format!(
+        "Binary '{}' not found in archive. Searched in temp_dir: {:?}",
+        binary_name, temp_dir
+    ))
 }
 
 /// Extract gh binary from a tar.gz archive (Linux)
@@ -494,11 +522,10 @@ pub async fn check_gh_cli_auth(app: AppHandle) -> Result<GhAuthStatus, String> {
     }
 
     // Run gh auth status to check authentication
-    let shell_cmd = format!("{:?} auth status", binary_path);
+    // Use cli_command to handle .cmd files on Windows
+    log::trace!("Running auth check for: {:?}", binary_path);
 
-    log::trace!("Running auth check: {:?}", shell_cmd);
-
-    let output = crate::platform::shell_command(&shell_cmd)
+    let output = crate::platform::cli_command(&binary_path, &["auth", "status"])
         .output()
         .map_err(|e| format!("Failed to execute GitHub CLI: {e}"))?;
 
@@ -531,4 +558,130 @@ fn emit_progress(app: &AppHandle, stage: &str, message: &str, percent: u8) {
     if let Err(e) = app.emit("gh-cli:install-progress", &progress) {
         log::warn!("Failed to emit install progress: {}", e);
     }
+}
+
+// =============================================================================
+// GitHub Repository Listing Commands
+// =============================================================================
+
+use crate::projects::types::RemoteRepository;
+
+/// GitHub API response for repository listing
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhRepoListItem {
+    name: String,
+    #[serde(rename = "nameWithOwner")]
+    name_with_owner: String,
+    description: Option<String>,
+    url: String,
+    ssh_url: String,
+    #[serde(rename = "isPrivate")]
+    is_private: bool,
+    #[serde(rename = "isFork")]
+    is_fork: bool,
+    #[serde(rename = "defaultBranchRef")]
+    default_branch_ref: Option<GhDefaultBranch>,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    #[serde(rename = "primaryLanguage")]
+    primary_language: Option<GhLanguage>,
+    #[serde(rename = "stargazerCount")]
+    stargazer_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhDefaultBranch {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhLanguage {
+    name: String,
+}
+
+/// List repositories for the authenticated GitHub user or a specific owner/org
+#[tauri::command]
+pub async fn list_github_repos(
+    app: AppHandle,
+    owner: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<RemoteRepository>, String> {
+    log::trace!(
+        "Listing GitHub repositories for owner: {:?}, limit: {:?}",
+        owner,
+        limit
+    );
+
+    let binary_path = get_gh_cli_binary_path(&app)?;
+
+    if !binary_path.exists() {
+        return Err("GitHub CLI not installed".to_string());
+    }
+
+    let limit = limit.unwrap_or(100);
+    let json_fields = "name,nameWithOwner,description,url,sshUrl,isPrivate,isFork,defaultBranchRef,updatedAt,primaryLanguage,stargazerCount";
+
+    // Build command args
+    let limit_str = limit.to_string();
+    let mut args: Vec<&str> = vec!["repo", "list"];
+
+    // Add owner if specified
+    if let Some(ref o) = owner {
+        args.push(o.as_str());
+    }
+
+    args.extend(["--json", json_fields, "--limit", &limit_str]);
+
+    log::trace!("Running gh with args: {:?}", args);
+
+    let output = crate::platform::cli_command(&binary_path, &args)
+        .output()
+        .map_err(|e| format!("Failed to execute gh command: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        log::warn!("gh repo list failed: {}", stderr);
+
+        if stderr.contains("auth login") || stderr.contains("authentication") {
+            return Err("GitHub CLI not authenticated. Run 'gh auth login' first.".to_string());
+        }
+
+        return Err(format!("Failed to list repositories: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let repos: Vec<GhRepoListItem> = serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse gh output: {e}"))?;
+
+    // Convert to RemoteRepository
+    let remote_repos: Vec<RemoteRepository> = repos
+        .into_iter()
+        .map(|r| {
+            // Convert HTTPS URL to proper clone URL
+            let clone_url = if r.url.ends_with(".git") {
+                r.url.clone()
+            } else {
+                format!("{}.git", r.url)
+            };
+
+            RemoteRepository {
+                name: r.name,
+                full_name: r.name_with_owner,
+                description: r.description,
+                clone_url,
+                ssh_url: r.ssh_url,
+                is_private: r.is_private,
+                is_fork: r.is_fork,
+                default_branch: r.default_branch_ref.map(|b| b.name).unwrap_or_else(|| "main".to_string()),
+                updated_at: r.updated_at,
+                language: r.primary_language.map(|l| l.name),
+                stars_count: r.stargazer_count,
+                provider: "github".to_string(),
+            }
+        })
+        .collect();
+
+    log::trace!("Found {} GitHub repositories", remote_repos.len());
+    Ok(remote_repos)
 }

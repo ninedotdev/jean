@@ -306,19 +306,6 @@ interface SessionState {
 // Collapsible dropdown for grouped sessions
 type GroupType = 'active' | 'planning' | 'vibing' | 'yoloing' | 'waiting' | 'review'
 
-interface SessionGroupDropdownProps {
-  label: string
-  sessions: SessionState[]
-  activeSessionId: string | undefined
-  isViewingReviewTab: boolean
-  reviewingSessions: Record<string, boolean>
-  /** Whether closing the last session is allowed (true for base sessions) */
-  canCloseLastSession: boolean
-  onTabClick: (sessionId: string) => void
-  onCloseSession: (e: React.MouseEvent, sessionId: string) => void
-  groupType?: GroupType
-}
-
 // Styling config for each group type
 const groupStyles: Record<
   GroupType,
@@ -361,46 +348,53 @@ const groupStyles: Record<
   },
 }
 
-function SessionGroupDropdown({
-  label,
-  sessions,
+interface GroupedSessionsSelectProps {
+  groups: {
+    label: string
+    sessions: SessionState[]
+    groupType: GroupType
+  }[]
+  activeSessionId: string | undefined
+  isViewingReviewTab: boolean
+  reviewingSessions: Record<string, boolean>
+  /** Whether closing the last session is allowed (true for base sessions) */
+  canCloseLastSession: boolean
+  onTabClick: (sessionId: string) => void
+  onCloseSession: (e: React.MouseEvent, sessionId: string) => void
+}
+
+function GroupedSessionsSelect({
+  groups,
   activeSessionId,
   isViewingReviewTab,
   reviewingSessions,
   canCloseLastSession,
   onTabClick,
   onCloseSession,
-  groupType = 'active',
-}: SessionGroupDropdownProps) {
+}: GroupedSessionsSelectProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const styles = groupStyles[groupType]
-  const isEmpty = sessions.length === 0
-
-  // Check if active session is in this group
-  const containsActiveSession = sessions.some(
-    s => s.id === activeSessionId && !isViewingReviewTab
+  const nonEmptyGroups = groups.filter(group => group.sessions.length > 0)
+  const totalSessions = nonEmptyGroups.reduce(
+    (total, group) => total + group.sessions.length,
+    0
   )
 
-  // Hover-to-open with delay (disabled when empty)
-  const handleMouseEnter = useCallback(() => {
-    if (isEmpty) return
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    timeoutRef.current = setTimeout(() => setIsOpen(true), 150)
-  }, [isEmpty])
+  const activeGroup = nonEmptyGroups.find(group =>
+    group.sessions.some(
+      session => session.id === activeSessionId && !isViewingReviewTab
+    )
+  )
+  const activeSessionName = activeGroup?.sessions.find(
+    session => session.id === activeSessionId
+  )?.session.name
 
-  const handleMouseLeave = useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    timeoutRef.current = setTimeout(() => setIsOpen(false), 200)
-  }, [])
-
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    }
-  }, [])
+  const triggerLabel = isViewingReviewTab
+    ? 'Review results'
+    : activeSessionName ?? 'Sessions'
+  const triggerIcon = activeGroup
+    ? groupStyles[activeGroup.groupType].icon
+    : groupStyles.active.icon
 
   const handleTabClickWithClose = useCallback(
     (sessionId: string) => {
@@ -411,80 +405,83 @@ function SessionGroupDropdown({
   )
 
   return (
-    <Popover open={isOpen && !isEmpty} onOpenChange={setIsOpen}>
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
           className={cn(
-            'group relative flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-sm transition-colors duration-150',
-            isEmpty
-              ? 'cursor-default text-muted-foreground/50'
-              : containsActiveSession
-                ? styles.activeClass
-                : 'text-muted-foreground hover:text-foreground/70'
+            'flex h-7 min-w-[180px] max-w-[260px] items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 text-sm text-muted-foreground transition-colors hover:text-foreground',
+            totalSessions === 0 && 'cursor-default opacity-60'
           )}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
+          aria-label="Select session group"
           onClick={() => {
-            if (isEmpty) return
-            const firstSession = sessions[0]
-            if (sessions.length === 1 && firstSession) {
-              onTabClick(firstSession.id)
-            } else {
-              setIsOpen(true)
-            }
+            if (totalSessions === 0) return
+            setIsOpen(true)
           }}
         >
-          {styles.icon}
-          <span>{label}</span>
-          <span
-            className={cn(
-              'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-              isEmpty ? 'bg-muted/50 text-muted-foreground/50' : styles.badgeClass
-            )}
-          >
-            {sessions.length}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-foreground">
+            {triggerIcon}
+            <span className="truncate">{triggerLabel}</span>
           </span>
-          {sessions.length > 1 && (
-            <ChevronDown
-              className={cn(
-                'h-3 w-3 transition-transform',
-                isOpen && 'rotate-180'
-              )}
-            />
-          )}
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {totalSessions}
+          </span>
+          <ChevronDown
+            className={cn('h-3 w-3 transition-transform', isOpen && 'rotate-180')}
+          />
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="max-h-[300px] w-auto min-w-[200px] max-w-[280px] overflow-y-auto p-1.5"
-        align="start"
-        sideOffset={4}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        className="max-h-[360px] w-[320px] overflow-y-auto p-2"
+        align="center"
+        sideOffset={6}
         onOpenAutoFocus={e => e.preventDefault()}
         onCloseAutoFocus={e => e.preventDefault()}
       >
-        <div className="flex flex-col gap-0.5">
-          {sessions.map(state => {
-            const isActive =
-              state.id === activeSessionId &&
-              !isViewingReviewTab
-            const isSessionReviewing = reviewingSessions[state.id] ?? false
+        <div className="flex flex-col gap-2">
+          {nonEmptyGroups.map(group => {
+            const styles = groupStyles[group.groupType]
 
             return (
-              <DropdownSessionItem
-                key={state.id}
-                session={state.session}
-                isActive={isActive}
-                isSessionSending={state.isSending}
-                isSessionWaiting={state.isWaiting}
-                isSessionReviewing={isSessionReviewing}
-                sessionExecutionMode={state.executionMode}
-                sessionsCount={sessions.length}
-                canCloseLastSession={canCloseLastSession}
-                onTabClick={handleTabClickWithClose}
-                onCloseSession={onCloseSession}
-              />
+              <div key={group.groupType} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
+                  {styles.icon}
+                  <span>{group.label}</span>
+                  <span
+                    className={cn(
+                      'ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                      styles.badgeClass
+                    )}
+                  >
+                    {group.sessions.length}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {group.sessions.map(state => {
+                    const isActive =
+                      state.id === activeSessionId &&
+                      !isViewingReviewTab
+                    const isSessionReviewing =
+                      reviewingSessions[state.id] ?? false
+
+                    return (
+                      <DropdownSessionItem
+                        key={state.id}
+                        session={state.session}
+                        isActive={isActive}
+                        isSessionSending={state.isSending}
+                        isSessionWaiting={state.isWaiting}
+                        isSessionReviewing={isSessionReviewing}
+                        sessionExecutionMode={state.executionMode}
+                        sessionsCount={group.sessions.length}
+                        canCloseLastSession={canCloseLastSession}
+                        onTabClick={handleTabClickWithClose}
+                        onCloseSession={onCloseSession}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
             )
           })}
         </div>
@@ -943,6 +940,25 @@ export function SessionTabBar({
     }
   }, [sessionStates, reviewingSessions, sortByRecentActivity, preferences?.session_grouping_enabled])
 
+  const groupedSelectGroups = useMemo(
+    () => [
+      { label: 'Idle', sessions: activeGroupStates, groupType: 'active' as GroupType },
+      { label: 'Planning', sessions: planningGroupStates, groupType: 'planning' as GroupType },
+      { label: 'Waiting', sessions: waitingGroupStates, groupType: 'waiting' as GroupType },
+      { label: 'Vibing', sessions: vibingGroupStates, groupType: 'vibing' as GroupType },
+      { label: 'Yoloing', sessions: yoloingGroupStates, groupType: 'yoloing' as GroupType },
+      { label: 'Review', sessions: reviewingGroupStates, groupType: 'review' as GroupType },
+    ],
+    [
+      activeGroupStates,
+      planningGroupStates,
+      waitingGroupStates,
+      vibingGroupStates,
+      yoloingGroupStates,
+      reviewingGroupStates,
+    ]
+  )
+
   // Compute visual order for keyboard navigation (matches display order)
   const visualOrderSessions = useMemo(() => {
     if (!shouldGroup) {
@@ -1036,7 +1052,7 @@ export function SessionTabBar({
         className="h-full w-full [&_[data-slot=scroll-area-viewport]]:!overflow-y-hidden [&_[data-slot=scroll-area-viewport]]:!overflow-x-scroll [&_[data-slot=scroll-area-scrollbar]]:hidden"
         viewportRef={tabScrollRef}
       >
-        <div className="flex h-8 items-center gap-0.5 px-2">
+        <div className="flex h-8 w-full items-center gap-0.5 px-2">
           {/* AI Review results tab - shown when review results exist */}
           {reviewResults && (
             <div
@@ -1081,74 +1097,17 @@ export function SessionTabBar({
           {/* Session tabs - grouped or flat depending on count */}
           {shouldGroup ? (
             // GROUPED MODE (> 6 sessions) - no drag-and-drop
-            <>
-              <SessionGroupDropdown
-                label="Idle"
-                sessions={activeGroupStates}
+            <div className="flex flex-1 items-center justify-center">
+              <GroupedSessionsSelect
+                groups={groupedSelectGroups}
                 activeSessionId={activeSessionId}
                 isViewingReviewTab={isViewingReviewTab}
                 reviewingSessions={reviewingSessions}
                 canCloseLastSession={isBase}
                 onTabClick={handleTabClick}
                 onCloseSession={handleCloseSession}
-                groupType="active"
               />
-              <SessionGroupDropdown
-                label="Planning"
-                sessions={planningGroupStates}
-                activeSessionId={activeSessionId}
-                isViewingReviewTab={isViewingReviewTab}
-                reviewingSessions={reviewingSessions}
-                canCloseLastSession={isBase}
-                onTabClick={handleTabClick}
-                onCloseSession={handleCloseSession}
-                groupType="planning"
-              />
-              <SessionGroupDropdown
-                label="Waiting"
-                sessions={waitingGroupStates}
-                activeSessionId={activeSessionId}
-                isViewingReviewTab={isViewingReviewTab}
-                reviewingSessions={reviewingSessions}
-                canCloseLastSession={isBase}
-                onTabClick={handleTabClick}
-                onCloseSession={handleCloseSession}
-                groupType="waiting"
-              />
-              <SessionGroupDropdown
-                label="Vibing"
-                sessions={vibingGroupStates}
-                activeSessionId={activeSessionId}
-                isViewingReviewTab={isViewingReviewTab}
-                reviewingSessions={reviewingSessions}
-                canCloseLastSession={isBase}
-                onTabClick={handleTabClick}
-                onCloseSession={handleCloseSession}
-                groupType="vibing"
-              />
-              <SessionGroupDropdown
-                label="Yoloing"
-                sessions={yoloingGroupStates}
-                activeSessionId={activeSessionId}
-                isViewingReviewTab={isViewingReviewTab}
-                reviewingSessions={reviewingSessions}
-                canCloseLastSession={isBase}
-                onTabClick={handleTabClick}
-                onCloseSession={handleCloseSession}
-                groupType="yoloing"
-              />
-              <SessionGroupDropdown
-                label="Review"
-                sessions={reviewingGroupStates}
-                activeSessionId={activeSessionId}
-                isViewingReviewTab={isViewingReviewTab}
-                reviewingSessions={reviewingSessions}
-                canCloseLastSession={isBase}
-                onTabClick={handleTabClick}
-                onCloseSession={handleCloseSession}
-                groupType="review"
-              />
-            </>
+            </div>
           ) : (
             // FLAT MODE (6 or fewer sessions) - with drag-and-drop
             <DndContext

@@ -26,20 +26,13 @@ interface ProjectTreeItemProps {
 }
 
 export function ProjectTreeItem({ project }: ProjectTreeItemProps) {
-  const {
-    expandedProjectIds,
-    selectedProjectId,
-    selectProject,
-    toggleProjectExpanded,
-    openProjectSettings,
-  } = useProjectsStore()
+  const expandedProjectIds = useProjectsStore(state => state.expandedProjectIds)
+  const selectedProjectId = useProjectsStore(state => state.selectedProjectId)
   const { data: worktrees = [] } = useWorktrees(project.id)
   const { data: appDataDir = '' } = useAppDataDir()
   const hasWorktrees = worktrees.length > 0
   const isExpanded = hasWorktrees && expandedProjectIds.has(project.id)
-  const setNewWorktreeModalOpen = useUIStore(
-    state => state.setNewWorktreeModalOpen
-  )
+  const showCollapsedWorktreeBadge = hasWorktrees && !isExpanded
 
   // Track image load errors to fall back to letter avatar
   // Use avatar_path as key to reset error state when it changes
@@ -76,34 +69,38 @@ export function ProjectTreeItem({ project }: ProjectTreeItemProps) {
 
   // Get chat store state
   const activeWorktreeId = useChatStore(state => state.activeWorktreeId)
-  const clearActiveWorktree = useChatStore(state => state.clearActiveWorktree)
 
   // Project is only selected if it's the selected project AND no worktree is active
   const isSelected = selectedProjectId === project.id && !activeWorktreeId
 
   const handleClick = useCallback(() => {
+    const { selectProject } = useProjectsStore.getState()
     selectProject(project.id)
     // Clear active worktree so ChatWindow shows Session Board view
+    const { clearActiveWorktree } = useChatStore.getState()
     clearActiveWorktree()
-  }, [project.id, selectProject, clearActiveWorktree])
+  }, [project.id])
 
   const handleChevronClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
+      const { toggleProjectExpanded } = useProjectsStore.getState()
       toggleProjectExpanded(project.id)
     },
-    [project.id, toggleProjectExpanded]
+    [project.id]
   )
 
   const handleAddWorktree = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       // Select this project first so the modal knows which project to use
+      const { selectProject } = useProjectsStore.getState()
       selectProject(project.id)
       // Open the New Session modal
+      const { setNewWorktreeModalOpen } = useUIStore.getState()
       setNewWorktreeModalOpen(true)
     },
-    [project.id, selectProject, setNewWorktreeModalOpen]
+    [project.id]
   )
 
   const handleBasePull = useCallback(
@@ -187,6 +184,16 @@ export function ProjectTreeItem({ project }: ProjectTreeItemProps) {
             )}
           </span>
 
+          {/* Collapsed worktrees badge */}
+          {showCollapsedWorktreeBadge && (
+            <span
+              className="shrink-0 rounded bg-muted/70 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+              title={`${worktrees.length} worktree${worktrees.length > 1 ? 's' : ''} collapsed`}
+            >
+              {worktrees.length}+
+            </span>
+          )}
+
           {/* Base branch pull/push indicators (when no base session) */}
           {baseBranchBehindCount > 0 && (
             <button
@@ -217,6 +224,7 @@ export function ProjectTreeItem({ project }: ProjectTreeItemProps) {
           <button
             onClick={e => {
               e.stopPropagation()
+              const { openProjectSettings } = useProjectsStore.getState()
               openProjectSettings(project.id)
             }}
             className="flex size-4 shrink-0 items-center justify-center rounded opacity-50 hover:bg-accent-foreground/10 hover:opacity-100"

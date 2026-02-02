@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Folder, Archive, Briefcase } from 'lucide-react'
+import { Plus, Folder, Archive, Briefcase, Settings, Download, Search } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -14,17 +14,21 @@ import {
   useProjects,
   useCreateFolder,
 } from '@/services/projects'
+import { usePreferences } from '@/services/preferences'
 import { fetchWorktreesStatus } from '@/services/git-status'
 import { prefetchSessions } from '@/services/chat'
 import { useProjectsStore } from '@/store/projects-store'
+import { useUIStore } from '@/store/ui-store'
 import { ProjectTree } from './ProjectTree'
 import { AddProjectDialog } from './AddProjectDialog'
 import { ProjectSettingsDialog } from './ProjectSettingsDialog'
 import { ArchivedModal } from '@/components/archive/ArchivedModal'
+import { ProviderUsageSidebar } from './ProviderUsageSidebar'
 import type { Worktree } from '@/types/projects'
 
 export function ProjectsSidebar() {
   const { data: projects = [], isLoading } = useProjects()
+  const { data: preferences } = usePreferences()
   const { setAddProjectDialogOpen } = useProjectsStore()
   const [archivedModalOpen, setArchivedModalOpen] = useState(false)
   const createFolder = useCreateFolder()
@@ -123,6 +127,31 @@ export function ProjectsSidebar() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="px-3 py-2 pt-3">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          Workspaces
+        </span>
+      </div>
+
+      {/* Search bar */}
+      <div className="px-2 pb-2">
+        <button
+          type="button"
+          onClick={() => useUIStore.getState().setCommandPaletteOpen(true)}
+          className="flex w-full items-center gap-2 rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Search className="size-3.5" />
+          <span className="flex-1 text-left">Search...</span>
+          <kbd className="pointer-events-none hidden h-5 select-none items-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex">
+            <span className="text-xs">⌘</span>K
+          </kbd>
+        </button>
+      </div>
+
+      {/* Multi-provider usage limits */}
+      {preferences?.show_usage_status_bar && <ProviderUsageSidebar />}
+
       {/* Content */}
       <div className="min-h-0 flex-1 overflow-auto">
         {isLoading ? (
@@ -136,37 +165,50 @@ export function ProjectsSidebar() {
         )}
       </div>
 
-      {/* Footer - transparent buttons with hover background */}
-      <div className={`flex gap-1 p-1.5 pb-2 ${isNarrow ? 'flex-col' : 'items-center'}`}>
+      {/* Footer - simplified */}
+      <div className="flex items-center gap-1 p-1.5 pb-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+              className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
             >
-              {!isNarrow && <Plus className="size-3.5" />}
-              New
+              <Plus className="size-4" />
+              {!isNarrow && <span>Add</span>}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuItem onClick={() => createFolder.mutate({ name: 'New Folder' })}>
-              <Folder className="mr-2 size-3.5" />
-              Folder
+            <DropdownMenuItem onClick={() => useUIStore.getState().openCloneRepoModal()}>
+              <Download className="mr-2 size-3.5" />
+              Clone Repository
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setAddProjectDialogOpen(true)}>
               <Briefcase className="mr-2 size-3.5" />
-              Project
+              Add Local Repository
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => createFolder.mutate({ name: 'New Folder' })}>
+              <Folder className="mr-2 size-3.5" />
+              New Folder
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          type="button"
-          className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg text-sm text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
-          onClick={() => setArchivedModalOpen(true)}
-        >
-          {!isNarrow && <Archive className="size-3.5" />}
-          Archived
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+              title="More options"
+            >
+              <Settings className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => setArchivedModalOpen(true)}>
+              <Archive className="mr-2 size-3.5" />
+              View Archived
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Dialogs */}

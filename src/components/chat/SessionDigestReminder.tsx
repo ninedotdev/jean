@@ -1,5 +1,6 @@
 import { memo } from 'react'
-import { X, Sparkles, Loader2 } from 'lucide-react'
+import { X, Sparkles } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { useChatStore } from '@/store/chat-store'
 import { usePreferences } from '@/services/preferences'
 
@@ -62,7 +63,7 @@ export const SessionDigestReminder = memo(function SessionDigestReminder({
         <div className="space-y-2 px-3 py-2.5 text-sm">
           {!digest ? (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner size={16} />
               <span>Generating summary...</span>
             </div>
           ) : (

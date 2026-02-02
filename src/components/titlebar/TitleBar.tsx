@@ -8,16 +8,26 @@ import {
 } from '@/components/ui/tooltip'
 import { useUIStore } from '@/store/ui-store'
 import { executeCommand, useCommandContext } from '@/lib/commands'
-import { PanelLeft, PanelLeftClose, Settings } from 'lucide-react'
+import {
+  PanelLeft,
+  PanelLeftClose,
+  Settings,
+} from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import { usePreferences } from '@/services/preferences'
 import { formatShortcutDisplay, DEFAULT_KEYBINDINGS } from '@/types/keybindings'
 
 interface TitleBarProps {
   className?: string
   title?: string
+  context?: string
 }
 
-export function TitleBar({ className, title = 'Jean' }: TitleBarProps) {
+export function TitleBar({
+  className,
+  title = 'Jean',
+  context,
+}: TitleBarProps) {
   const { leftSidebarVisible, toggleLeftSidebar } = useUIStore()
   const commandContext = useCommandContext()
   const { data: preferences } = usePreferences()
@@ -26,6 +36,7 @@ export function TitleBar({ className, title = 'Jean' }: TitleBarProps) {
     (preferences?.keybindings?.toggle_left_sidebar ||
       DEFAULT_KEYBINDINGS.toggle_left_sidebar) as string
   )
+
   return (
     <div
       data-tauri-drag-region
@@ -80,11 +91,20 @@ export function TitleBar({ className, title = 'Jean' }: TitleBarProps) {
         </div>
       </div>
 
-      {/* Center - Title */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-[50%] px-2">
-        <span className="block truncate text-sm font-medium text-foreground/80">
+      {/* Center - Title + Context */}
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3">
+        {/* Title */}
+        <span className="max-w-[300px] truncate text-sm font-medium text-foreground/80">
           {title}
         </span>
+
+        {/* Context Indicator */}
+        {context && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Spinner size={12} />
+            <span className="max-w-[200px] truncate">{context}</span>
+          </div>
+        )}
       </div>
     </div>
   )

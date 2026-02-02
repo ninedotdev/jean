@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react'
 import { X, FileText } from 'lucide-react'
-import { invoke } from '@tauri-apps/api/core'
 import type { PendingTextFile } from '@/types/chat'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Markdown } from '@/components/ui/markdown'
+import { useDeletePastedText } from '@/services/files'
 
 function isMarkdownFile(filename: string | undefined): boolean {
   if (!filename) return false
@@ -37,26 +37,22 @@ export function TextFilePreview({
   disabled,
 }: TextFilePreviewProps) {
   const [openFileId, setOpenFileId] = useState<string | null>(null)
+  const deletePastedText = useDeletePastedText()
 
   const handleRemove = useCallback(
-    async (e: React.MouseEvent, textFile: PendingTextFile) => {
+    (e: React.MouseEvent, textFile: PendingTextFile) => {
       // Prevent the click from bubbling to the preview dialog
       e.stopPropagation()
 
       if (disabled) return
 
-      // Delete the file from disk
-      try {
-        await invoke('delete_pasted_text', { path: textFile.path })
-      } catch (error) {
-        console.error('Failed to delete text file:', error)
-        // Still remove from UI even if delete fails
-      }
+      // Delete the file from disk (fires and forgets - still removes from UI even if delete fails)
+      deletePastedText.mutate({ path: textFile.path })
 
       // Remove from store
       onRemove(textFile.id)
     },
-    [disabled, onRemove]
+    [disabled, onRemove, deletePastedText]
   )
 
   const openFile = textFiles.find(tf => tf.id === openFileId)

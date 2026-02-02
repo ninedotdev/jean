@@ -6,8 +6,8 @@ import { useProjectsStore } from '@/store/projects-store'
 import { useChatStore } from '@/store/chat-store'
 import { useTerminalStore } from '@/store/terminal-store'
 import { ThemeProviderContext, type Theme } from '@/lib/theme-context'
-import { notify } from '@/lib/notifications'
 import { logger } from '@/lib/logger'
+import { extractErrorMessage } from '@/lib/errors'
 import type { CommandContext } from '@/lib/commands/types'
 import type { AppPreferences, ClaudeModel } from '@/types/preferences'
 import type { ThinkingLevel, ExecutionMode } from '@/types/chat'
@@ -33,7 +33,18 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   // Notifications
   const showToast = useCallback(
     (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-      notify(message, undefined, { type })
+      switch (type) {
+        case 'success':
+          toast.success(message)
+          break
+        case 'error':
+          toast.error(message)
+          break
+        case 'info':
+        default:
+          toast.info(message)
+          break
+      }
     },
     []
   )
@@ -43,27 +54,23 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { selectedWorktreeId } = useProjectsStore.getState()
 
     if (!selectedWorktreeId) {
-      notify('No worktree selected. Select a worktree first.', undefined, {
-        type: 'error',
-      })
+      toast.error('No worktree selected. Select a worktree first.')
       return
     }
 
     logger.info('Opening pull request for worktree:', { selectedWorktreeId })
-    notify('Opening pull request...', undefined, { type: 'info' })
+    const toastId = toast.loading('Opening pull request...')
 
     try {
       const result = await invoke<string>('open_pull_request', {
         worktreeId: selectedWorktreeId,
       })
       logger.info('Pull request opened:', { result })
-      notify('Pull request opened successfully!', undefined, {
-        type: 'success',
-      })
+      toast.success('Pull request opened successfully!', { id: toastId })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = extractErrorMessage(error)
       logger.error('Failed to open pull request:', { error: message })
-      notify(message, undefined, { type: 'error' })
+      toast.error(message, { id: toastId })
     }
   }, [])
 
@@ -72,9 +79,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { selectedWorktreeId } = useProjectsStore.getState()
 
     if (!selectedWorktreeId) {
-      notify('No worktree selected. Select a worktree first.', undefined, {
-        type: 'error',
-      })
+      toast.error('No worktree selected. Select a worktree first.')
       return
     }
 
@@ -86,9 +91,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { selectedWorktreeId } = useProjectsStore.getState()
 
     if (!selectedWorktreeId) {
-      notify('No worktree selected. Select a worktree first.', undefined, {
-        type: 'error',
-      })
+      toast.error('No worktree selected. Select a worktree first.')
       return
     }
 
@@ -100,21 +103,19 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { selectedWorktreeId } = useProjectsStore.getState()
 
     if (!selectedWorktreeId) {
-      notify('No worktree selected. Select a worktree first.', undefined, {
-        type: 'error',
-      })
+      toast.error('No worktree selected. Select a worktree first.')
       return
     }
 
-    notify('Rebasing worktree...', undefined, { type: 'info' })
+    const toastId = toast.loading('Rebasing worktree...')
 
     try {
       await invoke('rebase_worktree', { worktreeId: selectedWorktreeId })
-      notify('Rebase completed successfully!', undefined, { type: 'success' })
+      toast.success('Rebase completed successfully!', { id: toastId })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = extractErrorMessage(error)
       logger.error('Failed to rebase worktree:', { error: message })
-      notify(message, undefined, { type: 'error' })
+      toast.error(message, { id: toastId })
     }
   }, [])
 
@@ -123,9 +124,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { activeWorktreeId } = useChatStore.getState()
 
     if (!activeWorktreeId) {
-      notify('No worktree selected. Select a worktree first.', undefined, {
-        type: 'error',
-      })
+      toast.error('No worktree selected. Select a worktree first.')
       return
     }
 
@@ -165,10 +164,10 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
       await queryClient.invalidateQueries({
         queryKey: chatQueryKeys.session(sessionId),
       })
-      notify('Chat history cleared', undefined, { type: 'success' })
+      toast.success('Chat history cleared')
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(message, undefined, { type: 'error' })
+      const message = extractErrorMessage(error)
+      toast.error(message)
     }
   }, [queryClient])
 
@@ -176,13 +175,13 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const renameSession = useCallback(() => {
     const { activeWorktreeId, getActiveSession } = useChatStore.getState()
     if (!activeWorktreeId) {
-      notify('No worktree selected', undefined, { type: 'error' })
+      toast.error('No worktree selected')
       return
     }
 
     const sessionId = getActiveSession(activeWorktreeId)
     if (!sessionId) {
-      notify('No session selected', undefined, { type: 'error' })
+      toast.error('No session selected')
       return
     }
 
@@ -215,7 +214,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const renameWorktree = useCallback(() => {
     const { selectedWorktreeId } = useProjectsStore.getState()
     if (!selectedWorktreeId) {
-      notify('No worktree selected', undefined, { type: 'error' })
+      toast.error('No worktree selected')
       return
     }
 
@@ -253,15 +252,15 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const openInFinder = useCallback(async () => {
     const worktreePath = getTargetPath()
     if (!worktreePath) {
-      notify('No project or worktree selected', undefined, { type: 'error' })
+      toast.error('No project or worktree selected')
       return
     }
 
     try {
       await invoke('open_worktree_in_finder', { worktreePath })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(message, undefined, { type: 'error' })
+      const message = extractErrorMessage(error)
+      toast.error(message)
     }
   }, [getTargetPath])
 
@@ -269,7 +268,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const openInTerminal = useCallback(async () => {
     const worktreePath = getTargetPath()
     if (!worktreePath) {
-      notify('No project or worktree selected', undefined, { type: 'error' })
+      toast.error('No project or worktree selected')
       return
     }
 
@@ -279,8 +278,8 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
         terminal: preferences?.terminal,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(message, undefined, { type: 'error' })
+      const message = extractErrorMessage(error)
+      toast.error(message)
     }
   }, [getTargetPath, preferences?.terminal])
 
@@ -288,7 +287,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const openInEditor = useCallback(async () => {
     const worktreePath = getTargetPath()
     if (!worktreePath) {
-      notify('No project or worktree selected', undefined, { type: 'error' })
+      toast.error('No project or worktree selected')
       return
     }
 
@@ -298,8 +297,8 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
         editor: preferences?.editor,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(message, undefined, { type: 'error' })
+      const message = extractErrorMessage(error)
+      toast.error(message)
     }
   }, [getTargetPath, preferences?.editor])
 
@@ -307,15 +306,15 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const openOnGitHub = useCallback(async () => {
     const { selectedProjectId } = useProjectsStore.getState()
     if (!selectedProjectId) {
-      notify('No project selected', undefined, { type: 'error' })
+      toast.error('No project selected')
       return
     }
 
     try {
       await invoke('open_project_on_github', { projectId: selectedProjectId })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(message, undefined, { type: 'error' })
+      const message = extractErrorMessage(error)
+      toast.error(message)
     }
   }, [])
 
@@ -324,7 +323,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     const { selectedWorktreeId, selectedProjectId } =
       useProjectsStore.getState()
     if (!selectedWorktreeId && !selectedProjectId) {
-      notify('No project or worktree selected', undefined, { type: 'error' })
+      toast.error('No project or worktree selected')
       return
     }
     useUIStore.getState().setOpenInModalOpen(true)
@@ -335,7 +334,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     window.dispatchEvent(
       new CustomEvent('command:set-model', { detail: { model } })
     )
-    notify(`Model set to ${model}`, undefined, { type: 'success' })
+    toast.success(`Model set to ${model}`)
   }, [])
 
   // Model/Thinking - Set thinking level
@@ -351,7 +350,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     if (!sessionId) return
 
     setLevel(sessionId, level)
-    notify(`Thinking level set to ${level}`, undefined, { type: 'success' })
+    toast.success(`Thinking level set to ${level}`)
   }, [])
 
   // Execution Mode - Set mode
@@ -367,7 +366,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
     if (!sessionId) return
 
     setMode(sessionId, mode)
-    notify(`Execution mode set to ${mode}`, undefined, { type: 'success' })
+    toast.success(`Execution mode set to ${mode}`)
   }, [])
 
   // Execution Mode - Cycle mode
@@ -389,7 +388,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const setTheme = useCallback(
     (theme: Theme) => {
       themeContext.setTheme(theme)
-      notify(`Theme set to ${theme}`, undefined, { type: 'success' })
+      toast.success(`Theme set to ${theme}`)
     },
     [themeContext]
   )
@@ -413,7 +412,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const removeProject = useCallback(async () => {
     const { selectedProjectId } = useProjectsStore.getState()
     if (!selectedProjectId) {
-      notify('No project selected', undefined, { type: 'error' })
+      toast.error('No project selected')
       return
     }
 
@@ -423,6 +422,16 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
         detail: { projectId: selectedProjectId },
       })
     )
+  }, [])
+
+  // Projects - Clone from GitHub
+  const cloneFromGitHub = useCallback(() => {
+    useUIStore.getState().openCloneRepoModal('github')
+  }, [])
+
+  // Projects - Clone from GitLab
+  const cloneFromGitLab = useCallback(() => {
+    useUIStore.getState().openCloneRepoModal('gitlab')
   }, [])
 
   // State getters
@@ -484,7 +493,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const doGitPull = useCallback(async () => {
     const worktreePath = getTargetPath()
     if (!worktreePath) {
-      notify('No project or worktree selected', undefined, { type: 'error' })
+      toast.error('No project or worktree selected')
       return
     }
 
@@ -529,14 +538,14 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   // Git - Refresh git status immediately
   const refreshGitStatus = useCallback(() => {
     triggerImmediateGitPoll()
-    notify('Git status refreshed', undefined, { type: 'info' })
+    toast.info('Git status refreshed')
   }, [])
 
   // AI - Run code review
   const runAIReview = useCallback(async () => {
     const { activeWorktreeId, activeWorktreePath } = useChatStore.getState()
     if (!activeWorktreeId || !activeWorktreePath) {
-      notify('No worktree selected', undefined, { type: 'error' })
+      toast.error('No worktree selected')
       return
     }
 
@@ -573,7 +582,7 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const openTerminalPanel = useCallback(() => {
     const { selectedWorktreeId } = useProjectsStore.getState()
     if (!selectedWorktreeId) {
-      notify('No worktree selected', undefined, { type: 'error' })
+      toast.error('No worktree selected')
       return
     }
 
@@ -620,13 +629,13 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
   const resumeSession = useCallback(async () => {
     const { activeWorktreeId, getActiveSession } = useChatStore.getState()
     if (!activeWorktreeId) {
-      notify('No worktree selected', undefined, { type: 'error' })
+      toast.error('No worktree selected')
       return
     }
 
     const sessionId = getActiveSession(activeWorktreeId)
     if (!sessionId) {
-      notify('No session selected', undefined, { type: 'error' })
+      toast.error('No session selected')
       return
     }
 
@@ -712,6 +721,8 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
       addProject,
       initProject,
       removeProject,
+      cloneFromGitHub,
+      cloneFromGitLab,
 
       // AI
       runAIReview,
@@ -776,6 +787,8 @@ export function useCommandContext(preferences?: AppPreferences): CommandContext 
       addProject,
       initProject,
       removeProject,
+      cloneFromGitHub,
+      cloneFromGitLab,
       runAIReview,
       openTerminalPanel,
       runScript,

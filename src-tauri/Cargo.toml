@@ -44,6 +44,9 @@ flate2 = "1.0"   # For gzip decompression (gh CLI on Linux)
 tar = "0.4"      # For tar archive extraction (gh CLI on Linux)
 portable-pty = "0.8"  # For terminal/PTY support
 which = "7"           # For cross-platform executable detection
+tokio = { version = "1", features = ["sync", "time", "rt"] }  # For semaphore, timeout, and spawn_blocking
+chrono = { version = "0.4", features = ["serde"] }  # For datetime handling
+toml = "0.8"  # For parsing Kimi CLI config
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

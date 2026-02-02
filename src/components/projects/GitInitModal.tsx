@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
-import { Loader2, GitBranch, FolderOpen, AlertCircle } from 'lucide-react'
+import { GitBranch, FolderOpen, AlertCircle } from 'lucide-react'
+import { Spinner } from '@/components/ui/spinner'
 import {
   Dialog,
   DialogContent,
@@ -127,7 +128,7 @@ export function GitInitModal() {
             Cancel
           </Button>
           <Button onClick={handleInitialize} disabled={isPending}>
-            {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+            {isPending && <Spinner size={16} />}
             {initGit.isPending
               ? 'Initializing...'
               : addProject.isPending

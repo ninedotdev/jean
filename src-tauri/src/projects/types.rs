@@ -479,3 +479,37 @@ pub struct WorktreeBranchExistsEvent {
     /// PR context to use when creating a new worktree with the suggested name
     pub pr_context: Option<super::github_issues::PullRequestContext>,
 }
+
+// =============================================================================
+// Remote Repository Types (for clone from GitHub/GitLab)
+// =============================================================================
+
+/// Repository information from GitHub or GitLab
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRepository {
+    /// Repository name (e.g., "my-repo")
+    pub name: String,
+    /// Full name including owner (e.g., "owner/my-repo")
+    pub full_name: String,
+    /// Repository description
+    pub description: Option<String>,
+    /// HTTPS clone URL
+    pub clone_url: String,
+    /// SSH clone URL
+    pub ssh_url: String,
+    /// Whether the repository is private
+    pub is_private: bool,
+    /// Whether the repository is a fork
+    pub is_fork: bool,
+    /// Default branch name
+    pub default_branch: String,
+    /// Last updated timestamp (ISO format)
+    pub updated_at: String,
+    /// Primary language
+    pub language: Option<String>,
+    /// Star count
+    pub stars_count: u32,
+    /// Git provider ("github" or "gitlab")
+    pub provider: String,
+}
